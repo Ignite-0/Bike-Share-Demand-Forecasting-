@@ -1,0 +1,29 @@
+name: gbfs-collector
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"  # GitHub may delay or skip runs under load; Phase 2 marks gaps > 30 min.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: collector  # never let two runs race on the push
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m src.ingest.gbfs_collector
+      # ponytail: snapshots committed to main (~4 MB/day). Move to a separate data branch or object storage if repo size hurts.
+      - run: |
+          git config user.name "gbfs-collector"
+          git config user.email "actions@users.noreply.github.com"
+          git add -f data/raw/gbfs
+          git commit -qm "gbfs snapshot $(date -u +%FT%TZ)" || exit 0
+          git pull -q --rebase && git push -q
