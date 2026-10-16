@@ -3,7 +3,7 @@
 Writes data/raw/weather/weather_hourly.csv in UTC; Phase 2 converts to America/New_York so DST is
 handled in one place. Rerunning overwrites the file with the full range, so it is safe to repeat.
 The archive lags real time by a few days.
-Usage: python -m src.ingest.weather --start 2025-10-01 --end 2026-09-30
+Usage: python -m src.ingest.weather --start 2025-10-01 --end 2026-10-01
 """
 import argparse
 import urllib.parse
@@ -33,6 +33,6 @@ def main(start: str, end: str) -> None:
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--start", default="2025-10-01")
-    p.add_argument("--end", default="2026-09-30")
+    p.add_argument("--end", default="2026-10-01")
     a = p.parse_args()
     main(a.start, a.end)
