@@ -1,29 +1,38 @@
 name: gbfs-collector
 
+# GitHub fires schedules late or not at all (we saw 2-4 h gaps), so each run loops for ~5.5 h
+# taking a snapshot every 10 minutes. The hourly cron only has to start the next run in time;
+# the concurrency group queues it behind the running one, so runs chain back to back.
 on:
   schedule:
-    - cron: "*/10 * * * *"  # GitHub may delay or skip runs under load; Phase 2 marks gaps > 30 min.
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
-concurrency: collector  # never let two runs race on the push
+concurrency: collector
 
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 350  # GitHub's hard limit is 360
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m src.ingest.gbfs_collector
-      # ponytail: snapshots committed to main (~4 MB/day). Move to a separate data branch or object storage if repo size hurts.
+      # ponytail: snapshots committed to main (~8 MB/day). Move to a separate data branch or object storage if repo size hurts.
       - run: |
           git config user.name "gbfs-collector"
           git config user.email "actions@users.noreply.github.com"
-          git add -f data/raw/gbfs
-          git commit -qm "gbfs snapshot $(date -u +%FT%TZ)" || exit 0
-          git pull -q --rebase && git push -q
+          end=$(( $(date +%s) + 330 * 60 ))
+          while [ "$(date +%s)" -lt "$end" ]; do
+            # A failed fetch or push only costs this snapshot; the loop keeps going.
+            if python -m src.ingest.gbfs_collector; then
+              git add -f data/raw/gbfs
+              git commit -qm "gbfs snapshot $(date -u +%FT%TZ)" || true
+              { git pull -q --rebase && git push -q; } || { git rebase --abort 2>/dev/null; echo "push failed, retrying next round"; }
+            fi
+            sleep $(( 600 - $(date +%s) % 600 ))  # wake on the next :00/:10/:20... mark
+          done
