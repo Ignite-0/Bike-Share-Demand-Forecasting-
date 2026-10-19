@@ -10,3 +10,7 @@ collect:
 data:
 	$(PY) -m src.ingest.station_hour
 	$(PY) -m pytest -q tests
+
+features:
+	$(PY) -m src.features.build
+	$(PY) -m pytest -q tests/test_features.py
