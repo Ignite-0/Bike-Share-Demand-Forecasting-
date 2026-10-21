@@ -9,6 +9,7 @@ Tier B is an upper bound only (PRODUCTION_TIERS); never report it as production 
 """
 import argparse
 import contextlib
+import json
 import os
 import subprocess
 import threading
@@ -92,7 +93,7 @@ def fit_catboost(fit, stop, feats, target, loss, params, device):
 
 
 def train(target: str, feature_set: str, loss: str = "poisson", params: dict | None = None, fold: str = "val",
-          library: str = "lightgbm", device: str = "cpu"):
+          library: str = "lightgbm", device: str = "cpu", save_preds: bool = True):
     feats = feature_cols(feature_set)
     (fit_s, fit_w), (stop_s, stop_w), (score_s, score_w) = FOLDS[fold]
     fit = load(fit_s, feats + [target], where=fit_w)
@@ -113,8 +114,10 @@ def train(target: str, feature_set: str, loss: str = "poisson", params: dict | N
     t0 = time.time()
     val["pred"] = predict(val[feats])
     predict_s = time.time() - t0
-    os.makedirs(PREDS, exist_ok=True)
-    val[["station_id", "ts_utc", target, "pred"]].to_parquet(f"{PREDS}/{target}_{feature_set}_{loss}_{library}_{device}.parquet")
+    if save_preds:
+        os.makedirs(PREDS, exist_ok=True)
+        val[["station_id", "ts_utc", target, "pred"]].to_parquet(
+            f"{PREDS}/{target}_{feature_set}_{loss}_{library}_{device}.parquet")
     m = metrics(val[target], val["pred"])
     log_run({"target": target, "feature_set": feature_set, "loss": loss, "library": library, "device": device,
              "params": params, "train_rows": n, "train_s": train_s, "predict_s": predict_s, "best_iter": best_iter,
@@ -130,7 +133,10 @@ if __name__ == "__main__":
     ap.add_argument("--fold", default="val", choices=list(FOLDS))
     ap.add_argument("--library", default="lightgbm", choices=["lightgbm", "catboost"])
     ap.add_argument("--device", default="cpu", choices=["cpu", "gpu"])
+    ap.add_argument("--params", default="{}", help="JSON overrides of library params")
+    ap.add_argument("--no-preds", action="store_true", help="don't save val predictions (tuning trials)")
     a = ap.parse_args()
     if a.library == "lightgbm" and a.device == "gpu":
         ap.error("LightGBM GPU needs a source build; it runs on CPU only here")
-    train(a.target, a.features, a.loss, fold=a.fold, library=a.library, device=a.device)
+    train(a.target, a.features, a.loss, json.loads(a.params), fold=a.fold, library=a.library, device=a.device,
+          save_preds=not a.no_preds)
