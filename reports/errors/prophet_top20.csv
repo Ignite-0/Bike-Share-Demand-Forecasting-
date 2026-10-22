@@ -1,0 +1,9 @@
+,mae,rmse,wape,bias,stations_won
+pred,5.5928,8.9112,0.3048,-0.0347,0.0000
+blend,5.3805,8.6163,0.2932,-0.0232,19.0000
+b_published,5.6921,9.1553,0.3102,0.0240,1.0000
+b_fresh,7.3472,11.7640,0.4004,0.0137,0.0000
+prophet_linear_additive,7.3348,9.9712,0.3997,0.0783,0.0000
+prophet_linear_multiplicative,6.5527,9.4042,0.3571,0.1533,0.0000
+prophet_flat_additive,7.6360,10.1030,0.4161,0.1353,0.0000
+prophet_flat_multiplicative,7.6366,10.1035,0.4162,0.1354,0.0000
