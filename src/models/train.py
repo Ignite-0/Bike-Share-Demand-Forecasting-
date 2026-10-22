@@ -36,9 +36,11 @@ FOLDS = {
 
 
 def lgb_objective(loss: str) -> dict:
-    """'poisson', 'l2', 'l1', 'tweedie1.5' -> LightGBM objective params."""
+    """'poisson', 'l2', 'l1', 'tweedie1.5', 'q90' (quantile 0.9) -> LightGBM objective params."""
     if loss.startswith("tweedie"):
         return {"objective": "tweedie", "tweedie_variance_power": float(loss[7:])}
+    if loss.startswith("q"):
+        return {"objective": "quantile", "alpha": int(loss[1:]) / 100}
     return {"objective": loss}
 
 

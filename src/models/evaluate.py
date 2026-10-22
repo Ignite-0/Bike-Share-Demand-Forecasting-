@@ -5,6 +5,7 @@ Usage:
     python -m src.models.evaluate --errors pickups_A+sid_tweedie1.2_lightgbm_cpu_tuned
         # step 6: breakdowns, worst station-days and monthly error for a saved run -> reports/errors/
     python -m src.models.evaluate --blend pickups_A+sid_tweedie1.2_lightgbm_cpu_tuned   # hour-weighted blend
+    python -m src.models.evaluate --intervals pickups   # step 9: P10-P90 coverage vs a Poisson interval
 """
 import csv
 import json
@@ -163,6 +164,46 @@ def blend_report(name: str, out: str = "reports/errors") -> None:
     print(weights.T.to_string(float_format="%.2f"))
 
 
+def interval_report(target: str, out: str = "reports/errors") -> None:
+    """Step 9: calibration of the P10-P90 quantile models on val, vs a Poisson interval around the blend mean.
+    For counts, 'inside' is p10 <= y <= p90; below/above should each be ~10%."""
+    import duckdb
+    from scipy.stats import poisson
+
+    from src.models.data import FEATURES
+
+    t = PREFIX[target]
+    run = f"'data/processed/preds/{target}_A+sid_{{}}_lightgbm_cpu_tuned.parquet'"
+    w = f"reports/errors/{target}_A+sid_tweedie1.2_lightgbm_cpu_tuned_blend_weights.csv"
+    df = duckdb.sql(f"""
+        SELECT m.{target} AS y, m.pred AS mean, a.pred AS p10, b.pred AS p50, c.pred AS p90, f.hour, f.volume_tier,
+               f.{t}_recent_profile, f.{t}_profile
+        FROM {run.format("tweedie1.2")} m
+        JOIN {run.format("q10")} a USING (station_id, ts_utc) JOIN {run.format("q50")} b USING (station_id, ts_utc)
+        JOIN {run.format("q90")} c USING (station_id, ts_utc) JOIN {FEATURES} f USING (station_id, ts_utc)""").df()
+    wt = df["hour"].map(pd.read_csv(w, index_col="hour")["fit_jun"])
+    df["blend"] = wt * df["mean"] + (1 - wt) * baseline(df, target, "published")
+    df["pois10"], df["pois90"] = poisson.ppf(0.1, df["blend"]), poisson.ppf(0.9, df["blend"])
+
+    def calib(g):
+        return pd.Series({"rows": len(g),
+                          "q_inside": ((g.y >= g.p10) & (g.y <= g.p90)).mean(), "q_below": (g.y < g.p10).mean(),
+                          "q_above": (g.y > g.p90).mean(), "q_width": (g.p90 - g.p10).mean(),
+                          "q_crossed": (g.p10 > g.p90).mean(),
+                          "pois_inside": ((g.y >= g.pois10) & (g.y <= g.pois90)).mean(),
+                          "pois_below": (g.y < g.pois10).mean(), "pois_above": (g.y > g.pois90).mean(),
+                          "pois_width": (g.pois90 - g.pois10).mean()})
+
+    df["volume_tier"] = df["volume_tier"].fillna("new")
+    tab = pd.concat([calib(df).to_frame("all").T.assign(dim="all")]
+                    + [df.groupby(d, observed=True).apply(calib, include_groups=False).assign(dim=d)
+                       for d in ("volume_tier", "hour")])
+    tab.to_csv(f"{out}/{target}_intervals.csv", index_label="group", float_format="%.4f")
+    print(target, "P50 metrics:", {k: round(v, 4) for k, v in metrics(df.y, df.p50).items()},
+          "| blend:", {k: round(v, 4) for k, v in metrics(df.y, df.blend).items()})
+    print(tab.to_string(float_format="%.3f"))
+
+
 def log_run(row: dict) -> None:
     git = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     row = {"timestamp": datetime.now().isoformat(timespec="seconds"), "git_commit": git,
@@ -190,6 +231,9 @@ if __name__ == "__main__":
         sys.exit()
     if len(sys.argv) == 3 and sys.argv[1] == "--blend":
         blend_report(sys.argv[2])
+        sys.exit()
+    if len(sys.argv) == 3 and sys.argv[1] == "--intervals":
+        interval_report(sys.argv[2])
         sys.exit()
 
     for target in PREFIX:
