@@ -21,6 +21,10 @@ from src.models.data import STOP_FROM, feature_cols, load
 from src.models.evaluate import log_run, metrics
 
 PREDS = "data/processed/preds"
+MODELS = "data/processed/models"  # dev models for analysis; final artifacts go to models/ (step 10)
+# Step 5 winner (reports/PHASE5_REPORT.md section 7); pass --params tuned
+TUNED = {"learning_rate": 0.0805, "num_leaves": 255, "min_data_in_leaf": 200, "feature_fraction": 0.86,
+         "bagging_fraction": 1.0, "bagging_freq": 1, "lambda_l2": 1}
 # (split, where) for fit / early-stop / score. "val" is the default protocol; "aug" is the rolling fold that
 # has seen the flat Jul plateau: fit Oct-Jul, stop on Aug 1-15, score Aug 16-31.
 FOLDS = {
@@ -93,7 +97,8 @@ def fit_catboost(fit, stop, feats, target, loss, params, device):
 
 
 def train(target: str, feature_set: str, loss: str = "poisson", params: dict | None = None, fold: str = "val",
-          library: str = "lightgbm", device: str = "cpu", save_preds: bool = True):
+          library: str = "lightgbm", device: str = "cpu", save_preds: bool = True,
+          tag: str = ""):
     feats = feature_cols(feature_set)
     (fit_s, fit_w), (stop_s, stop_w), (score_s, score_w) = FOLDS[fold]
     fit = load(fit_s, feats + [target], where=fit_w)
@@ -115,9 +120,12 @@ def train(target: str, feature_set: str, loss: str = "poisson", params: dict | N
     val["pred"] = predict(val[feats])
     predict_s = time.time() - t0
     if save_preds:
+        name = f"{target}_{feature_set}_{loss}_{library}_{device}{'_' + tag if tag else ''}"
         os.makedirs(PREDS, exist_ok=True)
-        val[["station_id", "ts_utc", target, "pred"]].to_parquet(
-            f"{PREDS}/{target}_{feature_set}_{loss}_{library}_{device}.parquet")
+        val[["station_id", "ts_utc", target, "pred"]].to_parquet(f"{PREDS}/{name}.parquet")
+        if library == "lightgbm":
+            os.makedirs(MODELS, exist_ok=True)
+            model.save_model(f"{MODELS}/{name}.txt", num_iteration=best_iter)
     m = metrics(val[target], val["pred"])
     log_run({"target": target, "feature_set": feature_set, "loss": loss, "library": library, "device": device,
              "params": params, "train_rows": n, "train_s": train_s, "predict_s": predict_s, "best_iter": best_iter,
@@ -133,10 +141,12 @@ if __name__ == "__main__":
     ap.add_argument("--fold", default="val", choices=list(FOLDS))
     ap.add_argument("--library", default="lightgbm", choices=["lightgbm", "catboost"])
     ap.add_argument("--device", default="cpu", choices=["cpu", "gpu"])
-    ap.add_argument("--params", default="{}", help="JSON overrides of library params")
+    ap.add_argument("--params", default="{}", help="JSON overrides of library params, or 'tuned' for TUNED")
+    ap.add_argument("--tag", default="", help="suffix for the saved preds/model file names")
     ap.add_argument("--no-preds", action="store_true", help="don't save val predictions (tuning trials)")
     a = ap.parse_args()
     if a.library == "lightgbm" and a.device == "gpu":
         ap.error("LightGBM GPU needs a source build; it runs on CPU only here")
-    train(a.target, a.features, a.loss, json.loads(a.params), fold=a.fold, library=a.library, device=a.device,
-          save_preds=not a.no_preds)
+    params = TUNED if a.params == "tuned" else json.loads(a.params)
+    train(a.target, a.features, a.loss, params, fold=a.fold, library=a.library, device=a.device,
+          save_preds=not a.no_preds, tag=a.tag)

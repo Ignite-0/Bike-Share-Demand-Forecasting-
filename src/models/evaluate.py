@@ -1,6 +1,9 @@
 """Metrics, baselines and the experiment log.
 
-Usage: python -m src.models.evaluate   # scores both baselines on val, appends to reports/experiments.csv
+Usage:
+    python -m src.models.evaluate           # scores both baselines on val, appends to reports/experiments.csv
+    python -m src.models.evaluate --errors pickups_A+sid_tweedie1.2_lightgbm_cpu_tuned
+        # step 6: breakdowns, worst station-days and monthly error for a saved run -> reports/errors/
 """
 import csv
 import json
@@ -39,6 +42,84 @@ def baseline(df: pd.DataFrame, target: str, kind: str) -> pd.Series:
     return df[f"{t}_{first}"].fillna(df[f"{t}_{second}"]).fillna(0)
 
 
+def _groups(df: pd.DataFrame) -> pd.DataFrame:
+    """Reporting dimensions of the plan (section 4). NULL cluster = opened after June ("new")."""
+    names = {0: "0 residential", 1: "1 evening-heavy", 2: "2 balanced", 3: "3 business", -1: "-1 low volume"}
+    return pd.DataFrame({
+        "cluster": df["cluster"].map(names).fillna("new"),
+        "volume_tier": df["volume_tier"].fillna("new"),
+        "hour": df["hour"],
+        "daytype": np.select([df["is_holiday"], df["is_weekend"]], ["holiday", "weekend"], "weekday"),
+        "precip": pd.cut(df["precip_mm"], [-1, 0.1, 0.5, 2, 1e9], right=False,
+                         labels=["dry", "0.1-0.5", "0.5-2", ">=2"]).astype(str),
+    }, index=df.index)
+
+
+def compare(df: pd.DataFrame, y: str, by: str) -> pd.DataFrame:
+    """Model vs both baselines for one dimension; gain_* = MAE reduction vs that baseline."""
+    out = breakdown(df, y, "pred", by)
+    for b in ("fresh", "published"):
+        out[f"mae_{b}"] = breakdown(df, y, f"b_{b}", by)["mae"]
+        out[f"gain_{b}"] = 1 - out["mae"] / out[f"mae_{b}"]
+    return out
+
+
+def error_report(name: str, out: str = "reports/errors") -> None:
+    """Breakdowns by the plan's dimensions, 10 worst station-days, and error by month (H5) for a saved run."""
+    import duckdb
+    import lightgbm as lgb
+
+    from src.models.data import FEATURES, load
+
+    target = name.split("_")[0]
+    t = PREFIX[target]
+    base = [f"{t}_{c}" for c in ("lag168", "same_hour_4w", "recent_profile", "profile")]
+    rep_cols = ["cluster", "volume_tier", "hour", "is_holiday", "is_weekend", "precip_mm"]
+    df = duckdb.sql(f"""
+        SELECT p.station_id, p.ts_utc, f.ts_local, p.{target}, p.pred, {", ".join("f." + c for c in base + rep_cols)}
+        FROM 'data/processed/preds/{name}.parquet' p JOIN {FEATURES} f USING (station_id, ts_utc)
+        WHERE f.split = 'val'""").df()
+    df["b_fresh"], df["b_published"] = baseline(df, target, "fresh"), baseline(df, target, "published")
+    df = df.join(_groups(df), rsuffix="_g")
+    os.makedirs(out, exist_ok=True)
+
+    tables = []
+    for dim in ("cluster", "volume_tier", "daytype", "precip", "hour"):
+        by = dim if dim in ("daytype", "precip") else f"{dim}_g"
+        tables.append(compare(df, target, by).reset_index(names="group").assign(dim=dim))
+    tab = pd.concat(tables)[["dim", "group", "rows", "mae", "rmse", "wape", "bias", "mae_fresh", "mae_published",
+                             "gain_fresh", "gain_published"]]
+    tab.to_csv(f"{out}/{name}_breakdown.csv", index=False, float_format="%.4f")
+
+    df["abs_err"] = (df["pred"] - df[target]).abs()
+    df["date"] = df["ts_local"].dt.date
+    worst = (df.groupby(["station_id", "date"], observed=True)
+             .agg(abs_err=("abs_err", "sum"), actual=(target, "sum"), pred=("pred", "sum"),
+                  b_published=("b_published", "sum"), cluster=("cluster_g", "first"),
+                  precip_mm=("precip_mm", "sum"))
+             .nlargest(10, "abs_err").reset_index())
+    worst.to_csv(f"{out}/{name}_worst_days.csv", index=False, float_format="%.2f")
+    del df
+
+    # H5: the same model on every month it was fit on, early-stopped on (Jun) and scored on (Jul-Aug)
+    model = lgb.Booster(model_file=f"data/processed/models/{name}.txt")
+    rows = []
+    for split in ("train", "val"):
+        m = load(split, model.feature_name() + [target, "ts_local"] + base)
+        m["pred"] = model.predict(m[model.feature_name()])
+        m["b_fresh"], m["b_published"] = baseline(m, target, "fresh"), baseline(m, target, "published")
+        m["month"] = m["ts_local"].dt.strftime("%Y-%m")
+        rows.append(compare(m, target, "month"))
+        del m
+    monthly = pd.concat(rows).reset_index(names="month")
+    monthly["role"] = np.select([monthly["month"] < "2026-06", monthly["month"] == "2026-06"],
+                                ["fit", "early stop"], "val")
+    monthly.to_csv(f"{out}/{name}_monthly.csv", index=False, float_format="%.4f")
+    with pd.option_context("display.width", 200, "display.max_columns", 20):
+        print(tab.to_string(index=False, float_format="%.3f"), worst.to_string(index=False),
+              monthly.to_string(index=False, float_format="%.3f"), sep="\n\n")
+
+
 def log_run(row: dict) -> None:
     git = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     row = {"timestamp": datetime.now().isoformat(timespec="seconds"), "git_commit": git,
@@ -57,7 +138,13 @@ def log_run(row: dict) -> None:
 
 
 if __name__ == "__main__":
+    import sys
+
     from src.models.data import load
+
+    if len(sys.argv) == 3 and sys.argv[1] == "--errors":
+        error_report(sys.argv[2])
+        sys.exit()
 
     for target in PREFIX:
         t = PREFIX[target]
