@@ -1,0 +1,17 @@
+target,subset,method,rows,mae,rmse,wape,bias,gain_vs_fresh,gain_vs_published,above_p90
+pickups,all,pred,1683689,1.3714,2.7402,0.4652,-0.0676,0.2397,0.1323,0.1150
+pickups,all,model,1683689,1.3526,2.7076,0.4588,-0.0741,0.2501,0.1442,
+pickups,all,b_published,1683689,1.5804,3.2195,0.5361,-0.0277,0.1238,0.0000,
+pickups,all,b_fresh,1683689,1.8038,3.6906,0.6119,0.0417,0.0000,-0.1413,
+pickups,without_storm,pred,1515177,1.3984,2.7897,0.4449,-0.0959,0.2211,0.0848,0.1200
+pickups,without_storm,model,1515177,1.3965,2.7819,0.4443,-0.0913,0.2222,0.0860,
+pickups,without_storm,b_published,1515177,1.5279,3.0992,0.4860,-0.0926,0.1490,0.0000,
+pickups,without_storm,b_fresh,1515177,1.7955,3.6368,0.5712,-0.0082,0.0000,-0.1751,
+dropoffs,all,pred,1683689,1.3824,2.7515,0.4689,-0.0609,0.2336,0.1286,0.1164
+dropoffs,all,model,1683689,1.3603,2.7115,0.4614,-0.0646,0.2459,0.1426,
+dropoffs,all,b_published,1683689,1.5865,3.2364,0.5381,-0.0278,0.1205,0.0000,
+dropoffs,all,b_fresh,1683689,1.8038,3.6845,0.6118,0.0416,0.0000,-0.1370,
+dropoffs,without_storm,pred,1515177,1.4063,2.7966,0.4473,-0.0908,0.2165,0.0834,0.1222
+dropoffs,without_storm,model,1515177,1.4031,2.7869,0.4463,-0.0832,0.2183,0.0854,
+dropoffs,without_storm,b_published,1515177,1.5342,3.1130,0.4880,-0.0928,0.1452,0.0000,
+dropoffs,without_storm,b_fresh,1515177,1.7949,3.6272,0.5709,-0.0086,0.0000,-0.1699,
