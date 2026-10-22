@@ -4,6 +4,7 @@ Usage:
     python -m src.models.evaluate           # scores both baselines on val, appends to reports/experiments.csv
     python -m src.models.evaluate --errors pickups_A+sid_tweedie1.2_lightgbm_cpu_tuned
         # step 6: breakdowns, worst station-days and monthly error for a saved run -> reports/errors/
+    python -m src.models.evaluate --blend pickups_A+sid_tweedie1.2_lightgbm_cpu_tuned   # hour-weighted blend
 """
 import csv
 import json
@@ -120,6 +121,48 @@ def error_report(name: str, out: str = "reports/errors") -> None:
               monthly.to_string(index=False, float_format="%.3f"), sep="\n\n")
 
 
+def fit_blend(df: pd.DataFrame, y: str) -> pd.Series:
+    """Per-hour weight w on the model in w * pred + (1 - w) * b_published, minimizing MAE (grid of 0.05)."""
+    grid = np.linspace(0, 1, 21)
+    return df.groupby("hour").apply(lambda g: grid[np.argmin(
+        [np.abs(w * g["pred"] + (1 - w) * g["b_published"] - g[y]).mean() for w in grid])], include_groups=False)
+
+
+def blend_report(name: str, out: str = "reports/errors") -> None:
+    """Hour-weighted blend of a saved model with B-published. Weights fit on June (protocol: score Jul-Aug) and on
+    July (score Aug only, as with a monthly refit). Logs both to the experiment log."""
+    import lightgbm as lgb
+
+    from src.models.data import STOP_FROM, load
+
+    target, feature_set = name.split("_")[:2]
+    t = PREFIX[target]
+    model = lgb.Booster(model_file=f"data/processed/models/{name}.txt")
+    cols = model.feature_name() + [target, "ts_local", "hour", f"{t}_recent_profile", f"{t}_profile"]
+
+    def scored(split, where):
+        d = load(split, cols, where=where)
+        d["pred"], d["b_published"] = model.predict(d[model.feature_name()]), baseline(d, target, "published")
+        return d[[target, "ts_local", "hour", "pred", "b_published"]]
+
+    june, val = scored("train", f"AND ts_local >= '{STOP_FROM}'"), scored("val", "")
+    july, aug = val[val.ts_local < "2026-08-01"], val[val.ts_local >= "2026-08-01"]
+    weights = pd.DataFrame({"fit_jun": fit_blend(june, target), "fit_jul": fit_blend(july, target)})
+    weights.to_csv(f"{out}/{name}_blend_weights.csv")
+    for fit, score, label in (("fit_jun", val, "jun"), ("fit_jul", aug, "jul")):
+        w = score["hour"].map(weights[fit])
+        blend = w * score["pred"] + (1 - w) * score["b_published"]
+        m = metrics(score[target], blend)
+        print(label, "model", {k: round(v, 4) for k, v in metrics(score[target], score["pred"]).items()},
+              "\n   ", label, "blend", {k: round(v, 4) for k, v in m.items()},
+              "\n   ", label, "B-pub", {k: round(v, 4) for k, v in metrics(score[target], score["b_published"]).items()})
+        log_run({"target": target, "feature_set": f"{feature_set}+blend" + ("" if label == "jun" else "@aug-only"),
+                 "loss": "", "library": "blend", "device": "cpu", "params": {"weights_fit_on": label, "model": name},
+                 "train_rows": len(june if label == "jun" else july), "train_s": 0.0, "predict_s": 0.0,
+                 **{f"val_{k}": v for k, v in m.items()}})
+    print(weights.T.to_string(float_format="%.2f"))
+
+
 def log_run(row: dict) -> None:
     git = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     row = {"timestamp": datetime.now().isoformat(timespec="seconds"), "git_commit": git,
@@ -144,6 +187,9 @@ if __name__ == "__main__":
 
     if len(sys.argv) == 3 and sys.argv[1] == "--errors":
         error_report(sys.argv[2])
+        sys.exit()
+    if len(sys.argv) == 3 and sys.argv[1] == "--blend":
+        blend_report(sys.argv[2])
         sys.exit()
 
     for target in PREFIX:
