@@ -1,0 +1,5 @@
+# Allowlist: the API downloads its forecasts from Hugging Face, so the image needs code only.
+*
+!requirements.txt
+!src/
+**/__pycache__
