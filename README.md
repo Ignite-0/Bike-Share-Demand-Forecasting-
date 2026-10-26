@@ -10,7 +10,7 @@ about to run empty or full, and suggests bike moves to prevent it.
 |---|---|
 | Forecast accuracy, held-out month (Sep 2026) | **24% lower error** than "same hour last week" on pick-ups (target ≥ 15%); 23% on drop-offs |
 | Against the best baseline production could use (station's published average) | 13% lower error |
-| Empty-station alerts, live track record (Oct 19–26) | 71% of stockouts warned in advance vs 60% for "nearly empty now"; 70% of alerts came true |
+| Empty-station alerts, Oct 19–26 (overlaps the tuning days, so optimistic) | 71% of stockouts warned in advance vs 60% for "nearly empty now"; 70% of alerts came true |
 | Full-station alerts, same period | 75% warned vs 66%; 77% of alerts came true |
 | Stockouts caught before the station was low at all | ~20% (the "nearly empty now" rule can't catch any) |
 
@@ -90,11 +90,16 @@ the gain is 22.1% on pick-ups and 21.7% on drop-offs.
 ## Alerts and the track record
 
 Alert levels were tuned by F1 on Oct 15–25 snapshots ([`reports/backtest_alerts.csv`](reports/backtest_alerts.csv))
-and frozen. The dashboard's **Track record** tab rescores the last 7 days every 3 hours: an alert counts as
-correct if the station really hit 0 bikes (or 0 free docks) in a saved snapshot within 3 hours. The comparison
-is "alert if nearly empty/full now", which is what you'd do without a forecast.
+and frozen. The dashboard's **Track record** tab rescores the last 7 days every 3 hours, counting only alerts
+made after Oct 26 so the levels are scored out of sample: an alert counts as correct if the station really hit
+0 bikes (or 0 free docks) in a saved snapshot within 3 hours. The comparison is "alert if nearly empty/full
+now", which is what you'd do without a forecast.
 
-| Oct 19–26, 127 hourly checks | Alerts that came true | Stockouts warned | Caught early |
+The table below is the first run, Oct 19–26. Most of those days were also used to pick the alert levels, so
+treat it as optimistic; the dashboard shows the out-of-sample numbers as they accumulate (a full week from
+about Nov 2).
+
+| Oct 19–26, 127 hourly checks (mostly in-sample) | Alerts that came true | Stockouts warned | Caught early |
 |---|---|---|---|
 | Empty: forecast | 70% | 71% | 22% |
 | Empty: "nearly empty now" | 73% | 60% | 0% |

@@ -153,12 +153,14 @@ def build_station_hour(con) -> None:
     """)
 
 
-def build_gbfs_status(con, src: str = "data/raw/gbfs/status/*/*.csv.gz", out: str = f"{P}gbfs_status.parquet") -> None:
+def build_gbfs_status(con, src: str | list[str] = "data/raw/gbfs/status/*/*.csv.gz",
+                      out: str = f"{P}gbfs_status.parquet") -> None:
+    files = "[" + ", ".join(f"'{f}'" for f in ([src] if isinstance(src, str) else src)) + "]"  # globs
     con.sql(f"""
         COPY (
             WITH s AS (
                 SELECT * REPLACE (fetched_at::TIMESTAMPTZ AS fetched_at)
-                FROM read_csv('{src}', all_varchar = true)
+                FROM read_csv({files}, all_varchar = true)
             ),
             snaps AS (
                 SELECT fetched_at,

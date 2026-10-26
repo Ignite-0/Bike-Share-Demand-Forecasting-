@@ -8,6 +8,7 @@ Hugging Face dataset; this process only downloads them (every SYNC_S) and fetche
 """
 import json
 import os
+import shutil
 import threading
 import time
 import urllib.request
@@ -28,6 +29,8 @@ ARTIFACTS = os.environ.get("ARTIFACTS", "https://huggingface.co/datasets/himel05
 LOCAL = Path("data/serving")
 FILES = ["forecasts.parquet", "scorecard.json", "track.parquet", "p90_sum_correction.json", "alert_thresholds.json"]
 SYNC_S = 600
+RETRY_S = 30  # after a failed sync (e.g. a cold start hitting a transient HF error)
+TIMEOUT_S = 60
 SNAP_TTL = 60  # GBFS publishes about once a minute
 INFO_TTL = 24 * 3600
 
@@ -40,7 +43,8 @@ def sync() -> None:
     LOCAL.mkdir(parents=True, exist_ok=True)
     if ARTIFACTS != "local":
         for name in FILES:  # download to a temp name, then swap, so readers never see half a file
-            urllib.request.urlretrieve(f"{ARTIFACTS}/{name}", LOCAL / f"{name}.tmp")
+            with urllib.request.urlopen(f"{ARTIFACTS}/{name}", timeout=TIMEOUT_S) as r,                  open(LOCAL / f"{name}.tmp", "wb") as f:
+                shutil.copyfileobj(r, f)
             os.replace(LOCAL / f"{name}.tmp", LOCAL / name)
     rebalance.P90_SUM, rebalance.THRESHOLDS = str(LOCAL / FILES[3]), str(LOCAL / FILES[4])
     state["fc"] = pd.read_parquet(LOCAL / "forecasts.parquet")
@@ -54,9 +58,10 @@ def sync_loop() -> None:
     while True:
         try:
             sync()
+            time.sleep(SYNC_S)
         except Exception as e:  # keep serving the last good files
             state["error"] = repr(e)
-        time.sleep(SYNC_S)
+            time.sleep(RETRY_S)
 
 
 @asynccontextmanager

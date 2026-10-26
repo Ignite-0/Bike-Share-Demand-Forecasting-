@@ -7,5 +7,5 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 EXPOSE 8000
-# Render sets PORT
-CMD uvicorn src.api.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Render sets PORT; exec so uvicorn is PID 1 and gets SIGTERM
+CMD exec uvicorn src.api.main:app --host 0.0.0.0 --port ${PORT:-8000}

@@ -76,6 +76,20 @@ def test_track_aligns_projections_with_actuals():
     assert pd.isna(t.loc[t0, "proj_1h"])
 
 
+def test_combine_weather_prefers_archive_for_past_and_live_for_future(tmp_path):
+    from src.api.publish import combine_weather
+
+    def csv(name, temp, hours):
+        pd.DataFrame({"time": [f"2026-10-26T{h}:00" for h in hours], "temp_c": temp}).to_csv(tmp_path / name, index=False)
+
+    csv("h.csv", 1, [10, 12, 13])
+    csv("l.csv", 2, [10, 11, 12, 13])
+    out = combine_weather(str(tmp_path / "h.csv"), str(tmp_path / "l.csv"), pd.Timestamp("2026-10-26 12:00", tz="UTC"),
+                          tmp_path / "w.csv")
+    # 10:00 archive; 11:00 missing from the archive -> live; 12:00 and later -> live forecast
+    assert pd.read_csv(out)["temp_c"].tolist() == [1, 2, 2, 2]
+
+
 def test_warming_up(monkeypatch):
     api.state["fc"] = None
     c = TestClient(api.app)

@@ -7,17 +7,20 @@ Runs every 3 h in .github/workflows/serve.yml, so the API host needs no models o
 - Track record: forecasts for the past 7 days rebuilt with *archived* forecast weather (what serving would have
   seen; forecasts depend on the target hour + weather only), scored like src.decision.backtest against the GBFS
   snapshots committed by the collector. Uses the frozen tuned alert levels; nothing is fitted here.
-  scorecard.json: precision/recall per kind x variant (7 days and per local day); track.parquet: actual bikes vs
-  the bikes projected 1 h and 3 h earlier, last 48 h per station. The newest 3 h aren't scored yet (window open).
+  scorecard.json: precision/recall per kind x variant (7 days and per local day), only for origins after the alert
+  levels' tuning cutoff (backtest.HOLDOUT), so it's out of sample; track.parquet: actual bikes vs the bikes
+  projected 1 h and 3 h earlier, last 48 h per station. The newest 3 h aren't scored yet (window open).
+- Live forecasts are written first; serve.yml uploads whatever was written even if the track record fails.
 """
+import glob
 import json
 import shutil
 from pathlib import Path
 
 import pandas as pd
 
-from src.decision.backtest import pairs, prf
-from src.decision.rebalance import LOOKAHEAD_H, THRESHOLDS, assess, levels, risk_scores
+from src.decision.backtest import HOLDOUT, pairs, prf
+from src.decision.rebalance import DEFAULT_LEVELS, LOOKAHEAD_H, THRESHOLDS, assess, levels, risk_scores
 from src.features.build import P, TZ, connect
 from src.ingest import weather
 from src.ingest.station_hour import build_gbfs_status
@@ -38,7 +41,7 @@ def scorecard(a: pd.DataFrame, lv: dict, persistence: dict) -> dict:
     summary, daily = [], []
     for kind in ("empty", "full"):
         actual = a[f"actual_{kind}"]
-        new = sc[f"{kind}_persistence"] > 2  # not low now (default level)
+        new = sc[f"{kind}_persistence"] > DEFAULT_LEVELS[kind]  # not low now (default level)
         for variant, col, level in (("point", kind, lv[kind]), ("cautious", f"{kind}_cautious", lv[f"{kind}_cautious"]),
                                     ("current stock", f"{kind}_persistence", persistence[f"{kind}_persistence"])):
             alert = sc[col] <= level
@@ -59,6 +62,16 @@ def track(a: pd.DataFrame, since: pd.Timestamp) -> pd.DataFrame:
     return act.round({"proj_1h": 2, f"proj_{LOOKAHEAD_H}h": 2}).sort_values(["station_id", "ts_utc"], ignore_index=True)
 
 
+def combine_weather(hist: str, live: str, now: pd.Timestamp, out: Path) -> str:
+    """Archived forecasts for hours before now, the live forecast from now on. Past hours the archive lacks
+    (it can lag) fall back to the live file's past days, so one forecast_range call covers the whole window."""
+    h, lv = pd.read_csv(hist), pd.read_csv(live)
+    cut = now.strftime("%Y-%m-%dT%H:%M")
+    w = pd.concat([h[h["time"] < cut], lv]).drop_duplicates("time", keep="first").sort_values("time")
+    w.to_csv(out, index=False)
+    return out.as_posix()
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     now = pd.Timestamp.now(tz="UTC").floor("h")
@@ -66,15 +79,19 @@ def main() -> None:
     naive = lambda t: str(t.tz_localize(None))  # noqa: E731  forecast_range takes naive UTC strings
 
     live = weather.main("", "", api="forecast").as_posix()
-    fc = forecast_range(naive(now), naive(now + pd.Timedelta(hours=WINDOW_H)), live)
-    fc.to_parquet(OUT / "forecasts.parquet")
-
     hist = weather.main(str((start - pd.Timedelta(days=1)).date()), str((now + pd.Timedelta(days=1)).date()),
                         api="historical-forecast", out=OUT / "weather_track.csv").as_posix()
-    past = pd.concat([forecast_range(naive(start), naive(now), hist), fc], ignore_index=True)
+    wx = combine_weather(hist, live, now, OUT / "weather_combined.csv")
+    past = forecast_range(naive(start), naive(now + pd.Timedelta(hours=WINDOW_H)), wx)
+    fc = past[past.ts_utc >= now].reset_index(drop=True)
+    fc.to_parquet(OUT / "forecasts.parquet")
+    for f in (P90_SUM, THRESHOLDS):  # the API's decision layer reads these two
+        shutil.copy(f, OUT)
 
     status = f"{P}gbfs_status_track.parquet"
-    build_gbfs_status(connect(), "data/raw/gbfs/status/*/*.csv.gz", status)
+    first = str((start - pd.Timedelta(days=1)).date())  # snapshot folders are UTC dates
+    days = [Path(d).as_posix() for d in sorted(glob.glob("data/raw/gbfs/status/*")) if Path(d).name >= first]
+    build_gbfs_status(connect(), [f"{d}/*.csv.gz" for d in days], status)
     p = pairs(status)
     p = p.assign(t0=p.t0.dt.tz_convert("UTC"))  # DuckDB returns the machine's timezone
     p = p[p.t0 >= start].reset_index(drop=True)
@@ -82,14 +99,14 @@ def main() -> None:
         a = assess(p, past, json.load(f))
     with open(THRESHOLDS) as f:
         persistence = json.load(f)["persistence"]
+    lv = levels()
+    s = a[a.t0 >= HOLDOUT]  # alert levels were tuned on earlier origins: score out of sample only
     card = {"built_at": pd.Timestamp.now(tz="UTC").isoformat(),
             "forecast_window_utc": [str(fc.ts_utc.min()), str(fc.ts_utc.max())],
-            "scored_window_utc": [str(a.t0.min()), str(a.t0.max())], "origins": int(a.t0.nunique()),
-            "levels": levels(), **scorecard(a, levels(), persistence)}
+            "tuned_before_utc": str(HOLDOUT), "scored_window_utc": [str(s.t0.min()), str(s.t0.max())],
+            "origins": int(s.t0.nunique()), "levels": lv, **scorecard(s, lv, persistence)}
     (OUT / "scorecard.json").write_text(json.dumps(card, indent=1))
     track(a, now - pd.Timedelta(hours=WINDOW_H)).to_parquet(OUT / "track.parquet")
-    for f in (P90_SUM, THRESHOLDS):  # the API's decision layer reads these two
-        shutil.copy(f, OUT)
     print(f"{OUT}: {len(fc):,} forecast rows; scored {card['origins']} origins {card['scored_window_utc']}")
     for r in card["summary"]:
         print(f"  {r['kind']:5} {r['variant']:13} precision {r['precision']:.2f} recall {r['recall']:.2f} "

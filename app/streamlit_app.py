@@ -91,7 +91,8 @@ with record:
         st.stop()
     w = [pd.Timestamp(t).tz_convert(NY) for t in card["scored_window_utc"]]
     st.markdown(f"How the alerts did against **what really happened**, from {w[0]:%b %d %H:%M} to {w[1]:%b %d %H:%M} "
-                f"({card['origins']} hourly checks). Ground truth: live station counts recorded every 10 minutes.")
+                f"({card['origins']} hourly checks). Ground truth: live station counts recorded every 10 minutes. "
+                "Only alerts made after the alert levels were tuned are counted.")
     s = pd.DataFrame(card["summary"])
     for kind, col in zip(("empty", "full"), st.columns(2)):
         r = s[(s.kind == kind)].set_index("variant")
