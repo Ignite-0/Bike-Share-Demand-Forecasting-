@@ -10,7 +10,7 @@ about to run empty or full, and suggests bike moves to prevent it.
 |---|---|
 | Forecast accuracy, held-out month (Sep 2026) | **24% lower error** than "same hour last week" on pick-ups (target ≥ 15%); 23% on drop-offs |
 | Against the best baseline production could use (station's published average) | 13% lower error |
-| Empty-station alerts, live track record (Oct 19–26) | 71% of stockouts warned in advance vs 60% for "nearly empty now"; 70% of alerts came true |
+| Empty-station alerts, Oct 19–26 (overlaps the tuning days, so optimistic) | 71% of stockouts warned in advance vs 60% for "nearly empty now"; 70% of alerts came true |
 | Full-station alerts, same period | 75% warned vs 66%; 77% of alerts came true |
 | Stockouts caught before the station was low at all | ~20% (the "nearly empty now" rule can't catch any) |
 
@@ -90,11 +90,16 @@ the gain is 22.1% on pick-ups and 21.7% on drop-offs.
 ## Alerts and the track record
 
 Alert levels were tuned by F1 on Oct 15–25 snapshots ([`reports/backtest_alerts.csv`](reports/backtest_alerts.csv))
-and frozen. The dashboard's **Track record** tab rescores the last 7 days every 3 hours: an alert counts as
-correct if the station really hit 0 bikes (or 0 free docks) in a saved snapshot within 3 hours. The comparison
-is "alert if nearly empty/full now", which is what you'd do without a forecast.
+and frozen. The dashboard's **Track record** tab rescores the last 7 days every 3 hours, counting only alerts
+made after Oct 26 so the levels are scored out of sample: an alert counts as correct if the station really hit
+0 bikes (or 0 free docks) in a saved snapshot within 3 hours. The comparison is "alert if nearly empty/full
+now", which is what you'd do without a forecast.
 
-| Oct 19–26, 127 hourly checks | Alerts that came true | Stockouts warned | Caught early |
+The table below is the first run, Oct 19–26. Most of those days were also used to pick the alert levels, so
+treat it as optimistic; the dashboard shows the out-of-sample numbers as they accumulate (a full week from
+about Nov 2).
+
+| Oct 19–26, 127 hourly checks (mostly in-sample) | Alerts that came true | Stockouts warned | Caught early |
 |---|---|---|---|
 | Empty: forecast | 70% | 71% | 22% |
 | Empty: "nearly empty now" | 73% | 60% | 0% |
@@ -159,5 +164,23 @@ reports/         figures, experiment log, test results, alert backtest
 .github/         collector (every 10 min), serve (every 3 h), CI
 ```
 
-*Trip data: Citi Bike System Data, used under the Citi Bike data license; this project is not affiliated with
-or endorsed by Citi Bike or Lyft. Weather data by Open-Meteo.com (CC BY 4.0).*
+## Data sources
+
+| Data | Source | Terms |
+|---|---|---|
+| Trips, Oct 2025 – Sep 2026 | [Citi Bike System Data](https://citibikenyc.com/system-data), monthly files from [s3.amazonaws.com/tripdata](https://s3.amazonaws.com/tripdata/index.html) | [Citi Bike Data License Agreement](https://citibikenyc.com/data-sharing-policy) |
+| Live station status and station info, every 10 min since Oct 15, 2026 | Citi Bike's public [GBFS feed](https://gbfs.lyft.com/gbfs/1.1/bkn/en/station_status.json) (format: [GBFS](https://github.com/MobilityData/gbfs)) | Citi Bike Data License Agreement |
+| Hourly weather: observed (training), archived forecasts (track record), live forecast (serving) | [Open-Meteo](https://open-meteo.com/) archive, historical-forecast and forecast APIs, one point in Midtown (40.7549, −73.9840) | [CC BY 4.0](https://open-meteo.com/en/license) |
+| US / New York public holidays | [`holidays`](https://github.com/vacanza/holidays) Python package | MIT |
+
+Published forecasts and the track record are served from the Hugging Face dataset
+[himel05/citibike-artifacts](https://huggingface.co/datasets/himel05/citibike-artifacts).
+
+## References
+
+- Ke, G. et al. (2017). [LightGBM: A Highly Efficient Gradient Boosting Decision Tree](https://proceedings.neurips.cc/paper/2017/hash/6449f44a102fde848669bdd9eb6b76fa-Abstract.html). NeurIPS 30. *(forecasting model)*
+- Lundberg, S. M. and Lee, S.-I. (2017). [A Unified Approach to Interpreting Model Predictions](https://proceedings.neurips.cc/paper/2017/hash/8a20a8621978632d76c43dfd28b67767-Abstract.html). NeurIPS 30. *(SHAP explanations)*
+- Taylor, S. J. and Letham, B. (2018). [Forecasting at Scale](https://doi.org/10.1080/00031305.2017.1380080). *The American Statistician* 72(1). *(Prophet comparison)*
+
+*Trip and station data: Citi Bike System Data, used under the Citi Bike Data License Agreement; this project is
+not affiliated with or endorsed by Citi Bike or Lyft. Weather data by Open-Meteo.com (CC BY 4.0).*

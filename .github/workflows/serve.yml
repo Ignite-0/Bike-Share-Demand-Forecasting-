@@ -24,8 +24,10 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt huggingface_hub==2.3.0
       - run: hf download "$REPO" --repo-type dataset --local-dir . --include "models/*" --include "data/processed/*"
-      - run: python -m src.api.publish
+      - run: python -m src.api.publish  # writes live forecasts before the track record
       # ponytail: one dataset commit per run (~8/day); squash history if the repo grows too large
-      - run: hf upload "$REPO" data/serving serving --repo-type dataset --commit-message "publish $(date -u +%FT%TZ)"
+      # upload what was written even if the track record failed, so fresh forecasts still go out
+      - if: ${{ !cancelled() }}
+        run: hf upload "$REPO" data/serving serving --repo-type dataset --commit-message "publish $(date -u +%FT%TZ)"
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
