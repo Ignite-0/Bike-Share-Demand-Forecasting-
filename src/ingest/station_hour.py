@@ -153,12 +153,12 @@ def build_station_hour(con) -> None:
     """)
 
 
-def build_gbfs_status(con) -> None:
+def build_gbfs_status(con, src: str = "data/raw/gbfs/status/*/*.csv.gz") -> None:
     con.sql(f"""
         COPY (
             WITH s AS (
                 SELECT * REPLACE (fetched_at::TIMESTAMPTZ AS fetched_at)
-                FROM read_csv('data/raw/gbfs/status/*/*.csv.gz', all_varchar = true)
+                FROM read_csv('{src}', all_varchar = true)
             ),
             snaps AS (
                 SELECT fetched_at,
@@ -166,7 +166,7 @@ def build_gbfs_status(con) -> None:
                 FROM (SELECT DISTINCT fetched_at FROM s)
             )
             SELECT s.fetched_at, s.station_id,
-                   TRY_CAST(COLUMNS(c -> c NOT IN ('fetched_at', 'station_id', 'last_reported')) AS INT),
+                   TRY_CAST(COLUMNS(c -> c NOT IN ('fetched_at', 'station_id', 'last_reported', 'gap_min')) AS INT),
                    to_timestamp(s.last_reported::BIGINT) AS last_reported,
                    snaps.gap_min,
                    coalesce(snaps.gap_min > 30, false) AS after_outage  -- feed gap; never interpolate
