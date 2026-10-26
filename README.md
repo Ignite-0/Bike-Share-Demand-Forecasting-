@@ -164,5 +164,23 @@ reports/         figures, experiment log, test results, alert backtest
 .github/         collector (every 10 min), serve (every 3 h), CI
 ```
 
-*Trip data: Citi Bike System Data, used under the Citi Bike data license; this project is not affiliated with
-or endorsed by Citi Bike or Lyft. Weather data by Open-Meteo.com (CC BY 4.0).*
+## Data sources
+
+| Data | Source | Terms |
+|---|---|---|
+| Trips, Oct 2025 – Sep 2026 | [Citi Bike System Data](https://citibikenyc.com/system-data), monthly files from [s3.amazonaws.com/tripdata](https://s3.amazonaws.com/tripdata/index.html) | [Citi Bike Data License Agreement](https://citibikenyc.com/data-sharing-policy) |
+| Live station status and station info, every 10 min since Oct 15, 2026 | Citi Bike's public [GBFS feed](https://gbfs.lyft.com/gbfs/1.1/bkn/en/station_status.json) (format: [GBFS](https://github.com/MobilityData/gbfs)) | Citi Bike Data License Agreement |
+| Hourly weather: observed (training), archived forecasts (track record), live forecast (serving) | [Open-Meteo](https://open-meteo.com/) archive, historical-forecast and forecast APIs, one point in Midtown (40.7549, −73.9840) | [CC BY 4.0](https://open-meteo.com/en/license) |
+| US / New York public holidays | [`holidays`](https://github.com/vacanza/holidays) Python package | MIT |
+
+Published forecasts and the track record are served from the Hugging Face dataset
+[himel05/citibike-artifacts](https://huggingface.co/datasets/himel05/citibike-artifacts).
+
+## References
+
+- Ke, G. et al. (2017). [LightGBM: A Highly Efficient Gradient Boosting Decision Tree](https://proceedings.neurips.cc/paper/2017/hash/6449f44a102fde848669bdd9eb6b76fa-Abstract.html). NeurIPS 30. *(forecasting model)*
+- Lundberg, S. M. and Lee, S.-I. (2017). [A Unified Approach to Interpreting Model Predictions](https://proceedings.neurips.cc/paper/2017/hash/8a20a8621978632d76c43dfd28b67767-Abstract.html). NeurIPS 30. *(SHAP explanations)*
+- Taylor, S. J. and Letham, B. (2018). [Forecasting at Scale](https://doi.org/10.1080/00031305.2017.1380080). *The American Statistician* 72(1). *(Prophet comparison)*
+
+*Trip and station data: Citi Bike System Data, used under the Citi Bike Data License Agreement; this project is
+not affiliated with or endorsed by Citi Bike or Lyft. Weather data by Open-Meteo.com (CC BY 4.0).*
