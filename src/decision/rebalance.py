@@ -32,26 +32,40 @@ MIN_MOVE = 3  # smaller moves aren't worth a truck stop
 STATUS = f"{P}gbfs_status.parquet"
 
 
-def info_sql() -> str:
-    """GBFS station_id -> trip station_id (via norm_id(short_name)), name, position; latest metadata file."""
-    info = sorted(glob.glob("data/raw/gbfs/info/*.json"))[-1]
-    return (f"SELECT station_id AS gbfs_id, {norm_id('short_name')} AS station_id, name, lat, lon AS lng "
-            f"FROM read_json('{info}')")
+def info_sql(src: str | None = None) -> str:
+    """GBFS station_id -> trip station_id (via norm_id(short_name)), name, position. Default: latest metadata file."""
+    src = src or f"read_json('{sorted(glob.glob('data/raw/gbfs/info/*.json'))[-1]}')"
+    return f"SELECT station_id AS gbfs_id, {norm_id('short_name')} AS station_id, name, lat, lon AS lng FROM {src}"
+
+
+def _snapshot_sql(status: str, info: str, where: str = "true") -> str:
+    """Renting stations of a GBFS status relation, keyed by trip station_id."""
+    return f"""
+        WITH info AS ({info})
+        SELECT i.station_id, i.name, i.lat, i.lng, s.fetched_at, s.num_bikes_available AS bikes,
+               s.num_bikes_available + s.num_docks_available AS slots
+        FROM {status} s JOIN info i ON i.gbfs_id = s.station_id
+        WHERE {where} AND s.is_renting = 1 AND s.is_installed = 1
+          AND s.num_bikes_available + s.num_docks_available > 0"""
 
 
 def snapshot(ts=None, status: str = STATUS) -> pd.DataFrame:
-    """Latest snapshot at or before ts (UTC), renting stations only, keyed by trip station_id."""
+    """Latest snapshot at or before ts (UTC) in the status parquet, renting stations only."""
     ts = None if ts is None else pd.Timestamp(ts)
     ts = ts if ts is None or ts.tz else ts.tz_localize("UTC")  # naive = UTC
     when = f"'{ts.tz_convert('UTC')}'::TIMESTAMPTZ" if ts is not None else "now()"
-    return duckdb.sql(f"""
-        WITH snap AS (SELECT max(fetched_at) AS f FROM '{status}' WHERE fetched_at <= {when}),
-             info AS ({info_sql()})
-        SELECT i.station_id, i.name, i.lat, i.lng, s.fetched_at, s.num_bikes_available AS bikes,
-               s.num_bikes_available + s.num_docks_available AS slots
-        FROM '{status}' s JOIN snap ON s.fetched_at = snap.f JOIN info i ON i.gbfs_id = s.station_id
-        WHERE s.is_renting = 1 AND s.is_installed = 1
-          AND s.num_bikes_available + s.num_docks_available > 0""").df()
+    latest = f"s.fetched_at = (SELECT max(fetched_at) FROM '{status}' WHERE fetched_at <= {when})"
+    return duckdb.sql(_snapshot_sql(f"'{status}'", info_sql(), latest)).df()
+
+
+def live_snapshot(status: dict, info: dict) -> pd.DataFrame:
+    """Same as snapshot() from raw GBFS feeds (gbfs_collector.fetch of station_status / station_information)."""
+    con = duckdb.connect()
+    s = pd.DataFrame(status["data"]["stations"])
+    s["fetched_at"] = pd.Timestamp(status["last_updated"], unit="s", tz="UTC")
+    con.register("live_status", s)
+    con.register("live_info", pd.DataFrame(info["data"]["stations"]))
+    return con.sql(_snapshot_sql("live_status", info_sql("live_info"))).df()
 
 
 def project(stock0, net_cum, slots) -> np.ndarray:
@@ -92,7 +106,8 @@ def assess(snap: pd.DataFrame, fc: pd.DataFrame, corr: dict, lookahead: int = LO
     for name, p in paths.items():
         win = np.column_stack([b0, p[:, :lookahead]])
         out[f"min_{name}"], out[f"max_{name}"] = win.min(1), win.max(1)
-    out["bikes_6h"] = paths["point"][:, -1]
+    for h in hs:  # projected bikes at t0 + h (the track record compares these with what happened)
+        out[f"bikes_{h}h"] = paths["point"][:, h - 1]
     return out
 
 
@@ -154,17 +169,24 @@ def moves(a: pd.DataFrame, max_km: float = MAX_KM, truck: int = TRUCK, min_move:
     return pd.DataFrame(rows, columns=["from", "from_name", "to", "to_name", "bikes", "km", "reason"])
 
 
-def recommend(timestamp=None, weather_csv: str = WEATHER, lv: dict | None = None) -> dict:
-    """Entry point for the API: the latest snapshot at or before timestamp (UTC) -> station risks and moves."""
-    snap = snapshot(timestamp)
+def covers(fc: pd.DataFrame, t0: pd.Timestamp) -> bool:
+    return fc.ts_utc.min() <= t0 and fc.ts_utc.max() >= t0 + pd.Timedelta(hours=H - 1)
+
+
+def recommend(timestamp=None, weather_csv: str = WEATHER, lv: dict | None = None,
+              snap: pd.DataFrame | None = None, fc: pd.DataFrame | None = None) -> dict:
+    """The latest snapshot at or before timestamp (UTC) -> station risks and moves.
+    The API passes a live snapshot and its cached forecasts; the CLI/backtest read the parquet files."""
+    snap = snapshot(timestamp) if snap is None else snap.copy()
     at = snap["fetched_at"].iloc[0].tz_convert("UTC")
     snap["t0"], snap["frac"] = at.floor("h"), 1 - (at - at.floor("h")) / pd.Timedelta(hours=1)
-    try:  # reuse the cached range if it covers the six hours
-        fc = pd.read_parquet(FORECASTS)
-        if not ((fc.ts_utc.min() <= at.floor("h")) and (fc.ts_utc.max() >= at.floor("h") + pd.Timedelta(hours=H - 1))):
-            raise FileNotFoundError
-    except FileNotFoundError:
-        fc = forecast_range(str(at.floor("h")), str(at.floor("h") + pd.Timedelta(hours=H)), weather_csv)
+    if fc is None:
+        try:  # reuse the cached range if it covers the six hours
+            fc = pd.read_parquet(FORECASTS)
+            if not covers(fc, at.floor("h")):
+                raise FileNotFoundError
+        except FileNotFoundError:
+            fc = forecast_range(str(at.floor("h")), str(at.floor("h") + pd.Timedelta(hours=H)), weather_csv)
     with open(P90_SUM) as f:
         corr = json.load(f)
     a = flag(assess(snap, fc, corr), lv)
