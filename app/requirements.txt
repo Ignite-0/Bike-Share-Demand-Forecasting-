@@ -1,0 +1,5 @@
+# Streamlit Community Cloud reads this (the entrypoint's folder) instead of the root requirements.txt
+pandas==3.0.6
+pydeck==0.9.3
+requests==2.34.2
+streamlit==1.66.1

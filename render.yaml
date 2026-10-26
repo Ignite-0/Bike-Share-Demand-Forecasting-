@@ -1,0 +1,10 @@
+# Render blueprint: free Docker web service for the API (sleeps after 15 min idle; ~1 min cold start).
+services:
+  - type: web
+    name: citibike-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    buildFilter:
+      paths: ["src/**", "requirements.txt", "Dockerfile"]  # skip the collector's snapshot commits
