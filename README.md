@@ -4,7 +4,7 @@ Forecasts hourly pick-ups and drop-offs at every Citi Bike station in New York 1
 about to run empty or full, and suggests bike moves to prevent it.
 
 **Live:** [dashboard](https://citibik.streamlit.app/) · [API docs](https://citibike-api-vk26.onrender.com/docs)
-(free hosting: the first request after a quiet spell takes about a minute while the API wakes up)
+(the first request after a quiet spell takes about a minute while the API wakes up)
 
 | Result | Value |
 |---|---|
