@@ -153,7 +153,7 @@ def build_station_hour(con) -> None:
     """)
 
 
-def build_gbfs_status(con, src: str = "data/raw/gbfs/status/*/*.csv.gz") -> None:
+def build_gbfs_status(con, src: str = "data/raw/gbfs/status/*/*.csv.gz", out: str = f"{P}gbfs_status.parquet") -> None:
     con.sql(f"""
         COPY (
             WITH s AS (
@@ -172,7 +172,7 @@ def build_gbfs_status(con, src: str = "data/raw/gbfs/status/*/*.csv.gz") -> None
                    coalesce(snaps.gap_min > 30, false) AS after_outage  -- feed gap; never interpolate
             FROM s JOIN snaps USING (fetched_at)
             ORDER BY s.fetched_at, s.station_id
-        ) TO '{P}gbfs_status.parquet' (FORMAT parquet)
+        ) TO '{out}' (FORMAT parquet)
     """)
 
 

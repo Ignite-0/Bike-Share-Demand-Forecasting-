@@ -6,7 +6,7 @@ The archive lags real time by a few days.
 Usage: python -m src.ingest.weather --start 2025-10-01 --end 2026-10-01
 
 --api historical-forecast: archived forecasts (what serving would have seen), for the Phase 6 backtest.
---api forecast: the live forecast (past 2 days + next 2), for serving. Both write weather_<api>.csv.
+--api forecast: the live forecast (past 2 days + today + next 2), for serving. Both write weather_<api>.csv.
 """
 import argparse
 import urllib.parse
@@ -22,8 +22,8 @@ LAT, LON = 40.7549, -73.9840
 VARS = "temperature_2m,apparent_temperature,precipitation,rain,snowfall,wind_speed_10m,weather_code"
 
 
-def main(start: str, end: str, api: str = "archive") -> Path:
-    span = {"past_days": 2, "forecast_days": 2} if api == "forecast" else {"start_date": start, "end_date": end}
+def main(start: str, end: str, api: str = "archive", out: Path | None = None) -> Path:
+    span = {"past_days": 2, "forecast_days": 3} if api == "forecast" else {"start_date": start, "end_date": end}
     q = urllib.parse.urlencode({
         "latitude": LAT, "longitude": LON, **span,
         "hourly": VARS, "timezone": "GMT", "format": "csv",
@@ -32,7 +32,7 @@ def main(start: str, end: str, api: str = "archive") -> Path:
     body = urllib.request.urlopen(f"{APIS[api]}?{q}", timeout=120).read()
     # Open-Meteo's CSV starts with a location metadata block, then a blank line, then the hourly table.
     table = body.decode().split("\n\n", 1)[1]
-    out = OUT if api == "archive" else OUT.with_name(f"weather_{api.replace('-', '_')}.csv")
+    out = out or (OUT if api == "archive" else OUT.with_name(f"weather_{api.replace('-', '_')}.csv"))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(table, encoding="utf-8")
     print(f"{out}: {table.count(chr(10)) - 1} hourly rows")

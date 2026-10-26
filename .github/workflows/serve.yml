@@ -1,0 +1,31 @@
+name: serve
+
+# Every 3 h: forecasts for the next 48 h + the 7-day track record, published to the HF dataset the API reads.
+# Needs the HF_TOKEN secret (write access to the dataset). Schedules run on main only.
+on:
+  schedule:
+    - cron: "15 */3 * * *"
+  workflow_dispatch:
+
+concurrency: serve
+
+env:
+  REPO: himel05/citibike-artifacts
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4  # includes the collector's GBFS snapshots (the track record's ground truth)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt huggingface_hub==2.3.0
+      - run: hf download "$REPO" --repo-type dataset --local-dir . --include "models/*" --include "data/processed/*"
+      - run: python -m src.api.publish
+      # ponytail: one dataset commit per run (~8/day); squash history if the repo grows too large
+      - run: hf upload "$REPO" data/serving serving --repo-type dataset --commit-message "publish $(date -u +%FT%TZ)"
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
