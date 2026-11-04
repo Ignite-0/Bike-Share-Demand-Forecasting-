@@ -32,7 +32,7 @@ jobs:
             if python -m src.ingest.gbfs_collector; then
               git add -f data/raw/gbfs
               git commit -qm "gbfs snapshot $(date -u +%FT%TZ)" || true
-              { git pull -q --rebase && git push -q; } || { git rebase --abort 2>/dev/null; echo "push failed, retrying next round"; }
+              { git pull -q --rebase && git push -q; } || { git rebase --abort 2>/dev/null || true; echo "push failed, retrying next round"; }
             fi
             sleep $(( 600 - $(date +%s) % 600 ))  # wake on the next :00/:10/:20... mark
           done
