@@ -12,6 +12,8 @@ Runs every 3 h in .github/workflows/serve.yml, so the API host needs no models o
   scorecard.json: precision/recall per kind x variant (7 days and per local day), only for origins after the alert
   levels' tuning cutoff (backtest.HOLDOUT), so it's out of sample; track.parquet: actual bikes vs the bikes
   projected 1 h and 3 h earlier, last 48 h per station. The newest 3 h aren't scored yet (window open).
+- accuracy_monthly.csv: forecast accuracy per out-of-sample month (MONTHLY: committed results of
+  `src.models.evaluate --live`), for the dashboard's accuracy tab. Add a line when a month is scored.
 - Live forecasts are written first; serve.yml uploads whatever was written even if the track record fails.
 """
 import glob
@@ -32,6 +34,7 @@ OUT = Path("data/serving")
 WINDOW_H = 48
 TRACK_DAYS = 7
 LOG_H = 6  # the decision layer's horizon
+MONTHLY = {"2026-10": ("reports/october_results.csv", "Oct 15-28, forecasts cached before October trips existed")}
 NOTE = ("Alerts flag a station when the projected stock reaches the alert level within 3 h. 'Actual' = the station "
         "really hit 0 bikes (empty) or 0 free docks (full) in a GBFS snapshot within those 3 h. Citi Bike's own "
         "rebalancing averts some stockouts, so precision is a lower bound. 'Caught early' = recall on stockouts at "
@@ -92,6 +95,8 @@ def main() -> None:
     fc[fc.ts_utc < now + pd.Timedelta(hours=LOG_H)].assign(issued_utc=now).to_parquet(OUT / f"log/{now:%Y-%m-%dT%H}.parquet")
     for f in (P90_SUM, THRESHOLDS):  # the API's decision layer reads these two
         shutil.copy(f, OUT)
+    pd.concat([pd.read_csv(f).assign(month=m, window=w) for m, (f, w) in MONTHLY.items()]).to_csv(
+        OUT / "accuracy_monthly.csv", index=False)
 
     status = f"{P}gbfs_status_track.parquet"
     first = str((start - pd.Timedelta(days=1)).date())  # snapshot folders are UTC dates
