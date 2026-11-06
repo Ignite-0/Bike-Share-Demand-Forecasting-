@@ -7,6 +7,6 @@ REPO=${REPO:-himel05/citibike-artifacts}
 HF=${HF:-.venv/Scripts/hf}
 "$HF" repos create "$REPO" --type dataset --exist-ok
 "$HF" upload "$REPO" . . --repo-type dataset --commit-message "inputs $(git rev-parse --short HEAD)" \
-  --include "models/*.txt" --include "models/*.json" --include "data/processed/station_hour.parquet" \
+  --include "models/*.txt" --include "models/*.json" --include "models/station_static.parquet" --include "data/processed/station_hour.parquet" \
   --include "data/processed/stations.parquet" --include "data/processed/station_labels.parquet"
 echo "https://huggingface.co/datasets/$REPO"

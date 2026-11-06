@@ -61,6 +61,12 @@ night (7-13% at 19-23 h) and nothing at 5-6 h (-1%). Drop-offs follow the same s
   stations now report 0, e.g. 6659.01). Capacity is a model feature, so regenerated forecasts for the same past
   hours differ (about 2% of rows, up to 22 trips at one station). That is why the pre-October cache is scored
   here, not a regenerated one.
+  Serving now reads capacity/lat/lng from `models/station_static.parquet` (the station table uploaded with the frozen
+  models on Oct 26; 73 stations differ from today's, 14 dropped to 0), falling back to `stations.parquet` only for
+  stations opened since. With it, regenerated P90 for past hours matches the cache exactly.
+- The blended mean can still move slightly on a rebuild: each station's grid ends at its last trip, so the last day
+  of the newest month lacked late-evening zero hours (Sep 30 had them only after October arrived). The recent
+  profile shifted by about 1/19 at 19-23 h for ~4% of rows. Logged forecasts (`serving/log/`) avoid both effects.
 
 ## Alert backtest rerun (`reports/backtest_alerts.csv`)
 

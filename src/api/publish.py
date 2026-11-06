@@ -4,6 +4,8 @@
 
 Runs every 3 h in .github/workflows/serve.yml, so the API host needs no models or trip history.
 - forecasts.parquet: target hours [now, now + 48 h), weather from the live Open-Meteo forecast.
+- log/<issued UTC hour>.parquet: the next LOG_H hours of that file, kept as issued (upload adds, never replaces), so
+  later months can be scored on forecasts frozen before their trips existed. Rebuilt forecasts can drift.
 - Track record: forecasts for the past 7 days rebuilt with *archived* forecast weather (what serving would have
   seen; forecasts depend on the target hour + weather only), scored like src.decision.backtest against the GBFS
   snapshots committed by the collector. Uses the frozen tuned alert levels; nothing is fitted here.
@@ -29,6 +31,7 @@ from src.models.predict import P90_SUM, forecast_range
 OUT = Path("data/serving")
 WINDOW_H = 48
 TRACK_DAYS = 7
+LOG_H = 6  # the decision layer's horizon
 NOTE = ("Alerts flag a station when the projected stock reaches the alert level within 3 h. 'Actual' = the station "
         "really hit 0 bikes (empty) or 0 free docks (full) in a GBFS snapshot within those 3 h. Citi Bike's own "
         "rebalancing averts some stockouts, so precision is a lower bound. 'Caught early' = recall on stockouts at "
@@ -85,6 +88,8 @@ def main() -> None:
     past = forecast_range(naive(start), naive(now + pd.Timedelta(hours=WINDOW_H)), wx)
     fc = past[past.ts_utc >= now].reset_index(drop=True)
     fc.to_parquet(OUT / "forecasts.parquet")
+    (OUT / "log").mkdir(exist_ok=True)
+    fc[fc.ts_utc < now + pd.Timedelta(hours=LOG_H)].assign(issued_utc=now).to_parquet(OUT / f"log/{now:%Y-%m-%dT%H}.parquet")
     for f in (P90_SUM, THRESHOLDS):  # the API's decision layer reads these two
         shutil.copy(f, OUT)
 

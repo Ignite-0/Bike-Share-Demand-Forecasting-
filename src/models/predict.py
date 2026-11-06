@@ -22,9 +22,15 @@ from src.models.evaluate import PREFIX, baseline
 
 CONFIG = "models/final_config.json"
 P90_SUM = "models/p90_sum_correction.json"
+# capacity/lat/lng as the frozen models saw them: a station_hour rebuild takes capacity from the newest GBFS info,
+# which would silently change forecasts for past hours. Stations not in it (opened later) use stations.parquet.
+STATIC = "models/station_static.parquet"
 FORECASTS = f"{P}forecasts.parquet"
 WEATHER = "data/raw/weather/weather_historical_forecast.csv"
 COLS = "station_id, ts_utc, ts_local, pickups, dropoffs, temp_c, feels_c, precip_mm, snow_cm, wind_kmh, is_holiday"
+STATIONS_SQL = f"""(SELECT s.station_id, coalesce(f.capacity, s.capacity) AS capacity, coalesce(f.lat, s.lat) AS lat,
+                          coalesce(f.lng, s.lng) AS lng
+                   FROM '{P}stations.parquet' s LEFT JOIN '{STATIC}' f USING (station_id))"""
 
 
 def load_models(cfg: dict) -> dict:
@@ -70,7 +76,7 @@ def features(start_utc: str, end_utc: str, weather_csv: str = WEATHER, batch: in
         src = f"""(SELECT {COLS} FROM '{P}station_hour.parquet' WHERE station_id IN (SELECT station_id FROM batch)
                          AND ts_utc < '{t0}'
                   UNION ALL SELECT {COLS} FROM fut WHERE station_id IN (SELECT station_id FROM batch))"""
-        sql = feature_sql(src, f"'{P}stations.parquet'", f"'{P}station_labels.parquet'")
+        sql = feature_sql(src, STATIONS_SQL, f"'{P}station_labels.parquet'")
         parts.append(con.sql(f"SELECT * FROM ({sql}) WHERE ts_utc >= '{t0}'").df())
     df = pd.concat(parts, ignore_index=True)
     df["station_id"] = df["station_id"].astype("category")
