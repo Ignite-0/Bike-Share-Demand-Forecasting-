@@ -156,8 +156,13 @@ with acc:
     st.subheader("Error by hour of day")
     st.line_chart(h[list(names)].rename(columns=names))
     st.subheader("By station type")
-    c = t[t.dim.isin(["cluster", "volume_tier", "daytype"])][
-        ["dim", "group", "rows", "mae", "wape", "gain_fresh", "gain_published", "p90_above"]]
+    # volume tiers "<5/day" and "new" are the same stations as clusters "-1 low volume" and "new"
+    c = t[t.dim.isin(["cluster", "daytype"]) | ((t.dim == "volume_tier") & ~t.group.isin(["<5/day", "new"]))]
+    kind = c.dim.map({"cluster": "Station type", "volume_tier": "Trips per day", "daytype": "Day"})
+    group = (c.group.str.replace(r"^-?\d+ ", "", regex=True).str.replace("/day", "")
+             .replace({"low volume": "low volume (under 5 trips/day)", "new": "new (opened after training)"}))
+    c = c.assign(stations=kind + ": " + group)[
+        ["stations", "rows", "mae", "wape", "gain_fresh", "gain_published", "p90_above"]]
     st.dataframe(c.rename(columns={"gain_fresh": "better than last week", "gain_published": "better than recent avg",
                                    "p90_above": "above P90"}).style.format(
         {"rows": "{:,.0f}", "mae": "{:.2f}", "wape": "{:.0%}", "better than last week": "{:.0%}",
