@@ -17,7 +17,7 @@ import duckdb
 import holidays
 
 TZ = "America/New_York"
-START, END = "2025-10-01", "2026-10-01"  # local dates, END exclusive
+START, END = "2025-10-01", "2026-11-01"  # local dates, END exclusive
 TRIPS = "data/raw/trips/*/*.csv"
 P = "data/processed/"
 

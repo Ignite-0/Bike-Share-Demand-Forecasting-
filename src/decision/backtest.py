@@ -1,6 +1,6 @@
 """Backtest of empty/full alerts against real stockouts in the GBFS snapshots.
 
-    python -m src.models.predict 2026-10-15 2026-10-29   # forecasts with archived-forecast weather (first)
+    python -m src.models.predict 2026-10-15 2026-11-07   # forecasts with archived-forecast weather (first)
     python -m src.decision.backtest
 
 Origins: whole UTC hours with a snapshot within 5 min (not right after a feed gap). For each renting station:
@@ -10,7 +10,7 @@ or ends before t0 + 2 h 45 min. Alert levels are tuned by F1 on origins whose wi
 scored once on origins from HOLDOUT on. Overlapping windows make pairs correlated: treat counts as indicative.
 
 Citi Bike's own rebalancing changes stock after t0, so some "false alarms" were averted stockouts: precision is a
-lower bound. Forecast accuracy itself can't be checked until October trips are published (early November).
+lower bound. Forecast accuracy on October: python -m src.models.evaluate --live (reports/OCTOBER_REPORT.md).
 """
 import json
 

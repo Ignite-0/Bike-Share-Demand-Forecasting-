@@ -3,7 +3,7 @@
 Writes data/raw/weather/weather_hourly.csv in UTC; Phase 2 converts to America/New_York so DST is
 handled in one place. Rerunning overwrites the file with the full range, so it is safe to repeat.
 The archive lags real time by a few days.
-Usage: python -m src.ingest.weather --start 2025-10-01 --end 2026-10-01
+Usage: python -m src.ingest.weather --start 2025-10-01 --end 2026-11-01
 
 --api historical-forecast: archived forecasts (what serving would have seen), for the Phase 6 backtest.
 --api forecast: the live forecast (past 2 days + today + next 2), for serving. Both write weather_<api>.csv.
@@ -42,7 +42,7 @@ def main(start: str, end: str, api: str = "archive", out: Path | None = None) ->
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--start", default="2025-10-01")
-    p.add_argument("--end", default="2026-10-01")
+    p.add_argument("--end", default="2026-11-01")
     p.add_argument("--api", default="archive", choices=list(APIS))
     a = p.parse_args()
     main(a.start, a.end, a.api)
