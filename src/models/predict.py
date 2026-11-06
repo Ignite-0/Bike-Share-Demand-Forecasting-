@@ -68,6 +68,7 @@ def features(start_utc: str, end_utc: str, weather_csv: str = WEATHER, batch: in
     for i in range(0, len(ids), batch):
         con.sql("CREATE OR REPLACE TEMP TABLE batch AS SELECT unnest(?::VARCHAR[]) AS station_id", params=[ids[i:i + batch]])
         src = f"""(SELECT {COLS} FROM '{P}station_hour.parquet' WHERE station_id IN (SELECT station_id FROM batch)
+                         AND ts_utc < '{t0}'
                   UNION ALL SELECT {COLS} FROM fut WHERE station_id IN (SELECT station_id FROM batch))"""
         sql = feature_sql(src, f"'{P}stations.parquet'", f"'{P}station_labels.parquet'")
         parts.append(con.sql(f"SELECT * FROM ({sql}) WHERE ts_utc >= '{t0}'").df())

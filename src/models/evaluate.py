@@ -6,6 +6,8 @@ Usage:
         # step 6: breakdowns, worst station-days and monthly error for a saved run -> reports/errors/
     python -m src.models.evaluate --blend pickups_A+sid_tweedie1.2_lightgbm_cpu_tuned   # hour-weighted blend
     python -m src.models.evaluate --intervals pickups   # step 9: P10-P90 coverage vs a Poisson interval
+    python -m src.models.evaluate --live data/processed/forecasts_oct15_28.parquet
+        # cached serving forecasts vs actuals on the live split (Oct on) -> reports/october_results.csv
 """
 import csv
 import json
@@ -204,6 +206,38 @@ def interval_report(target: str, out: str = "reports/errors") -> None:
     print(tab.to_string(float_format="%.3f"))
 
 
+def live_report(forecasts: str, out: str = "reports/october_results.csv") -> None:
+    """Score cached serving forecasts (blend mean + P90) on the 'live' split, i.e. months published after the
+    model was frozen, against both baselines. Overall, by cluster, volume tier, day type and hour."""
+    import duckdb
+
+    from src.models.data import FEATURES
+
+    rep_cols = ["cluster", "volume_tier", "hour", "is_holiday", "is_weekend", "precip_mm"]
+    base = [f"{t}_{c}" for t in PREFIX.values() for c in ("lag168", "same_hour_4w", "recent_profile", "profile")]
+    df = duckdb.sql(f"""
+        SELECT f.station_id, f.ts_utc, f.pickups, f.dropoffs, {", ".join("f." + c for c in base + rep_cols)},
+               fc.pu_mean, fc.pu_p90, fc.dr_mean, fc.dr_p90
+        FROM '{forecasts}' fc JOIN {FEATURES} f USING (station_id, ts_utc)
+        WHERE f.split = 'live'""").df()
+    print(f"{len(df):,} rows, {df.station_id.nunique()} stations, {df.ts_utc.min()} to {df.ts_utc.max()} UTC")
+    df = df.join(_groups(df), rsuffix="_g")
+    df["all"] = "all"
+    tables = []
+    for target, t in PREFIX.items():
+        d = df.assign(pred=df[f"{t}_mean"], b_fresh=baseline(df, target, "fresh"),
+                      b_published=baseline(df, target, "published"), above=df[target] > df[f"{t}_p90"])
+        for dim in ("all", "cluster", "volume_tier", "daytype", "hour"):
+            by = dim if dim in ("all", "daytype") else f"{dim}_g"
+            tab = compare(d, target, by).join(d.groupby(by, observed=True)["above"].mean().rename("p90_above"))
+            tables.append(tab.reset_index(names="group").assign(target=target, dim=dim))
+    tab = pd.concat(tables)[["target", "dim", "group", "rows", "mae", "rmse", "wape", "bias", "mae_fresh",
+                             "mae_published", "gain_fresh", "gain_published", "p90_above"]]
+    tab.to_csv(out, index=False, float_format="%.4f")
+    with pd.option_context("display.width", 200, "display.max_rows", 200):
+        print(tab.to_string(index=False, float_format="%.3f"))
+
+
 def log_run(row: dict) -> None:
     git = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     row = {"timestamp": datetime.now().isoformat(timespec="seconds"), "git_commit": git,
@@ -234,6 +268,9 @@ if __name__ == "__main__":
         sys.exit()
     if len(sys.argv) == 3 and sys.argv[1] == "--intervals":
         interval_report(sys.argv[2])
+        sys.exit()
+    if len(sys.argv) == 3 and sys.argv[1] == "--live":
+        live_report(sys.argv[2])
         sys.exit()
 
     for target in PREFIX:

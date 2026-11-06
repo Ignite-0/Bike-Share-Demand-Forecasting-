@@ -37,6 +37,7 @@ P = "data/processed/"
 SHUTDOWN = ("2026-02-22 20:00", "2026-02-24 05:00")  # local, from the EDA
 STORM = ("2026-09-26", "2026-09-28")  # local dates, test month
 SPLITS = ("2026-07-01", "2026-09-01")  # local: train < first <= val < second <= test
+LIVE_FROM = "2026-10-01"  # local: months published after the model was frozen; out-of-sample, never trained on
 TRAIN_END = SPLITS[0]
 PUBLISH_DAY = 15  # a month's trip file counts as available from this day of the next month
 MAX_HORIZON_H = 6
@@ -168,7 +169,8 @@ def feature_sql(src: str, stations: str, clusters: str) -> str:
         )
         SELECT w.station_id, w.ts_utc, w.ts_local,
                CASE WHEN w.ts_local < '{SPLITS[0]}' THEN 'train'
-                    WHEN w.ts_local < '{SPLITS[1]}' THEN 'val' ELSE 'test' END AS split,
+                    WHEN w.ts_local < '{SPLITS[1]}' THEN 'val'
+                    WHEN w.ts_local < '{LIVE_FROM}' THEN 'test' ELSE 'live' END AS split,
                w.pickups::SMALLINT AS pickups, w.dropoffs::SMALLINT AS dropoffs,
                w.hour::TINYINT AS hour, w.dow::TINYINT AS dow, w.is_weekend, w.is_holiday,
                cal.days_to_holiday::TINYINT AS days_to_holiday, cal.days_from_holiday::TINYINT AS days_from_holiday,
