@@ -8,7 +8,7 @@ live on free hosting and keeps score of its own alerts against real stockouts.
 [published forecasts](https://huggingface.co/datasets/himel05/citibike-artifacts)
 (the API sleeps when idle; the first request can take about a minute)
 
-**Full write-up:** [reports/FINAL_REPORT.md](reports/FINAL_REPORT.md)
+**Accuracy on months the model never saw:** the dashboard's *Forecast accuracy* tab.
 
 ## Results
 
@@ -60,7 +60,7 @@ flowchart LR
   Hugging Face dataset. The API reads those files and the live station feed, and the dashboard reads the API.
 
 Time-based splits only, one run on the test month, and a mutation test that checks no feature can see the
-future. Details, limitations and next steps are in the [final report](reports/FINAL_REPORT.md).
+future.
 
 ## Reproduce
 
