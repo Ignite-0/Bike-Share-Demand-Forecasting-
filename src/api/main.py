@@ -28,13 +28,14 @@ from src.ingest.gbfs_collector import fetch
 ARTIFACTS = os.environ.get("ARTIFACTS", "https://huggingface.co/datasets/himel05/citibike-artifacts/resolve/main/serving")
 LOCAL = Path("data/serving")
 FILES = ["forecasts.parquet", "scorecard.json", "track.parquet", "p90_sum_correction.json", "alert_thresholds.json"]
+MONTHLY = "accuracy_monthly.csv"  # optional: an API deployed before the next publish still serves the rest
 SYNC_S = 600
 RETRY_S = 30  # after a failed sync (e.g. a cold start hitting a transient HF error)
 TIMEOUT_S = 60
 SNAP_TTL = 60  # GBFS publishes about once a minute
 INFO_TTL = 24 * 3600
 
-state: dict = {"fc": None, "card": None, "track": None, "error": None}
+state: dict = {"fc": None, "card": None, "track": None, "monthly": None, "error": None}
 cache: dict = {}
 lock = threading.Lock()
 
@@ -46,6 +47,13 @@ def sync() -> None:
             with urllib.request.urlopen(f"{ARTIFACTS}/{name}", timeout=TIMEOUT_S) as r,                  open(LOCAL / f"{name}.tmp", "wb") as f:
                 shutil.copyfileobj(r, f)
             os.replace(LOCAL / f"{name}.tmp", LOCAL / name)
+        try:
+            with urllib.request.urlopen(f"{ARTIFACTS}/{MONTHLY}", timeout=TIMEOUT_S) as r:
+                (LOCAL / MONTHLY).write_bytes(r.read())
+        except OSError:
+            pass
+    if (LOCAL / MONTHLY).exists():
+        state["monthly"] = pd.read_csv(LOCAL / MONTHLY)
     rebalance.P90_SUM, rebalance.THRESHOLDS = str(LOCAL / FILES[3]), str(LOCAL / FILES[4])
     state["fc"] = pd.read_parquet(LOCAL / "forecasts.parquet")
     state["track"] = pd.read_parquet(LOCAL / "track.parquet")
@@ -204,6 +212,12 @@ def recommendations() -> Moves:
 def accuracy() -> dict:
     """Alert precision/recall over the last 7 days against real GBFS stockouts (see src.api.publish)."""
     return need("card")
+
+
+@app.get("/accuracy/monthly")
+def accuracy_monthly() -> list[dict]:
+    """Forecast MAE/RMSE/WAPE per out-of-sample month vs both baselines, overall and by cluster, tier, day type, hour."""
+    return records(need("monthly"))
 
 
 @app.get("/track/{station_id}")

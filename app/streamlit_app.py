@@ -1,5 +1,6 @@
 """Dashboard: stations at risk of running empty/full in the next 3 h, recommended bike moves, station forecasts, and
-the track record (alerts vs real stockouts, projected vs actual bikes). Reads the API only.
+the track record (alerts vs real stockouts, projected vs actual bikes), and forecast accuracy on months the model
+never saw. Reads the API only.
     .venv/Scripts/python -m streamlit run app/streamlit_app.py   (API_URL defaults to localhost:8000)
 """
 import os
@@ -36,7 +37,7 @@ if alerts is None or rec is None:
     st.stop()
 a = pd.DataFrame(alerts["stations"])
 names = dict(zip(a["name"] + " (" + a["station_id"] + ")", a["station_id"])) if len(a) else {}
-live, record = st.tabs(["Live alerts", "Track record"])
+live, record, acc = st.tabs(["Live alerts", "Track record", "Forecast accuracy"])
 
 with live:
     snap = pd.Timestamp(alerts["snapshot_at"]).tz_convert(NY)
@@ -126,3 +127,40 @@ with record:
                        "which shows up as jumps the forecast can't know about.")
         else:
             st.write("No track record for this station yet.")
+
+with acc:
+    rows = get("/accuracy/monthly")
+    if not rows:
+        st.info("Monthly accuracy isn't published yet.")
+        st.stop()
+    r = pd.DataFrame(rows)
+    month = st.selectbox("Month", sorted(r.month.unique(), reverse=True))
+    r = r[r.month == month]
+    st.markdown(f"Hourly pick-ups and drop-offs per station in **{pd.Timestamp(month):%B %Y}**, a month the model was never "
+                f"trained or tuned on ({r.window.iloc[0]}). Compared with two simple forecasts: the **same hour last week**, "
+                "and the station's **recent average** for that hour and day type.")
+    for (target, g), col in zip(r[r.dim == "all"].groupby("target", sort=False), st.columns(2)):
+        label = {"pickups": "Pick-ups", "dropoffs": "Drop-offs"}[target]
+        g = g.iloc[0]
+        col.metric(f"{label}: error vs same hour last week", f"{-g.gain_fresh:+.1%}",
+                   "target: at least 15% lower", delta_color="off")
+        col.metric(f"{label}: error vs recent average", f"{-g.gain_published:+.1%}", delta_color="off")
+        col.metric(f"{label}: actual above the high (P90) forecast", f"{g.p90_above:.1%}", "target: 10%",
+                   delta_color="off")
+    st.caption("Error = mean absolute error per station-hour. Negative = the model's error is lower.")
+
+    target = st.radio("Target", ["pickups", "dropoffs"], horizontal=True)
+    t = r[r.target == target]
+    names = {"mae": "model", "mae_fresh": "same hour last week", "mae_published": "recent average"}
+    h = t[t.dim == "hour"].assign(hour=lambda d: d.group.astype(int)).set_index("hour")
+    st.subheader("Error by hour of day")
+    st.line_chart(h[list(names)].rename(columns=names))
+    st.subheader("By station type")
+    c = t[t.dim.isin(["cluster", "volume_tier", "daytype"])][
+        ["dim", "group", "rows", "mae", "wape", "gain_fresh", "gain_published", "p90_above"]]
+    st.dataframe(c.rename(columns={"gain_fresh": "better than last week", "gain_published": "better than recent avg",
+                                   "p90_above": "above P90"}).style.format(
+        {"rows": "{:,.0f}", "mae": "{:.2f}", "wape": "{:.0%}", "better than last week": "{:.0%}",
+         "better than recent avg": "{:.0%}", "above P90": "{:.0%}"}), hide_index=True, width="stretch")
+    st.caption("'new' = stations opened after the training months: the model has no history for them until the next "
+               "retrain, so they lose to both simple forecasts.")
