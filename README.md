@@ -8,17 +8,20 @@ about to run empty or full, and suggests bike moves to prevent it.
 
 | Result | Value |
 |---|---|
-| Forecast accuracy, held-out month (Sep 2026) | **24% lower error** than "same hour last week" on pick-ups (target ≥ 15%); 23% on drop-offs |
-| Against the best baseline production could use (station's published average) | 13% lower error |
-| Empty-station alerts, Oct 19–26 (overlaps the tuning days, so optimistic) | 71% of stockouts warned in advance vs 60% for "nearly empty now"; 70% of alerts came true |
-| Full-station alerts, same period | 75% warned vs 66%; 77% of alerts came true |
+| Forecast accuracy, test month (Sep 2026, scored once) | **24% lower error** than "same hour last week" on pick-ups (target ≥ 15%); 23% on drop-offs |
+| Forecast accuracy, October 2026 (never seen, made with forecast weather) | **20.5% lower error** on pick-ups, 20.3% on drop-offs |
+| Against the station's published average (the best baseline production could use) | 13% lower error in September, 5% in October |
+| Empty-station alerts, Oct 26 – Nov 6 (out of sample, 201 hourly checks) | 73% of stockouts warned in advance vs 64% for "nearly empty now"; 70% of alerts came true |
+| Full-station alerts, same period | 76% warned vs 68%; 78% of alerts came true |
 | Stockouts caught before the station was low at all | ~20% (the "nearly empty now" rule can't catch any) |
+
+The dashboard's **Forecast accuracy** tab shows each month the model never saw, by hour and station type.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    T[Monthly trip files<br/>45M trips] --> SH[station_hour<br/>19.6M rows]
+    T[Monthly trip files<br/>50M trips] --> SH[station_hour<br/>21.4M rows]
     W[Weather forecast<br/>Open-Meteo] --> F
     SH --> F[Features<br/>src/features/build.py]
     F --> M[LightGBM + profile blend<br/>mean and P90]
@@ -28,8 +31,9 @@ flowchart LR
     G --> TR[Track record<br/>alerts vs real stockouts] --> API
 ```
 
-1. **Data.** A year of trips (Oct 2025 – Sep 2026, 45.2M after cleaning) is aggregated into a full
-   station × hour grid with zeros, weather and holidays. A GitHub Actions job has saved live station status
+1. **Data.** Thirteen months of trips (Oct 2025 – Oct 2026, 50.3M after cleaning) are aggregated into a full
+   station × hour grid with zeros, weather and holidays. October arrived after the model was frozen and is
+   kept apart as an out-of-sample month. A GitHub Actions job has saved live station status
    every 10 minutes since Oct 15, 2026; that is the ground truth for stockouts.
 2. **Forecast.** One LightGBM model per target on calendar, weather, station location/capacity and station ID,
    with a Tweedie loss, blended hour by hour with each station's average profile from published trip months.
@@ -39,7 +43,8 @@ flowchart LR
    3 hours; the cautious variant uses the 90th-percentile demand. Moves pair each at-risk station with the
    nearest station within 2 km that stays 30–70% full.
 4. **Serving.** Every 3 hours a GitHub Actions job builds the next 48 hours of forecasts and the 7-day track
-   record and publishes them to a Hugging Face dataset. The API downloads those files and reads live station
+   record and publishes them to a Hugging Face dataset. Each run also keeps the next 6 hours of forecasts as
+   issued, so later months are scored on forecasts frozen in advance. The API downloads those files and reads live station
    status on each request (cached for a minute), so it runs on a free host.
 
 ## What the data showed
@@ -95,40 +100,53 @@ made after Oct 26 so the levels are scored out of sample: an alert counts as cor
 0 bikes (or 0 free docks) in a saved snapshot within 3 hours. The comparison is "alert if nearly empty/full
 now", which is what you'd do without a forecast.
 
-The table below is the first run, Oct 19–26. Most of those days were also used to pick the alert levels, so
-treat it as optimistic; the dashboard shows the out-of-sample numbers as they accumulate (a full week from
-about Nov 2).
+Scored on Oct 26 – Nov 6, after the levels were frozen (201 hourly checks, out of sample):
 
-| Oct 19–26, 127 hourly checks (mostly in-sample) | Alerts that came true | Stockouts warned | Caught early |
+| Oct 26 – Nov 6 | Alerts that came true | Stockouts warned | Caught early |
 |---|---|---|---|
-| Empty: forecast | 70% | 71% | 22% |
-| Empty: "nearly empty now" | 73% | 60% | 0% |
-| Full: forecast | 77% | 75% | 19% |
-| Full: "nearly full now" | 78% | 66% | 0% |
+| Empty: forecast | 70% | 73% | 21% |
+| Empty: forecast, cautious (P90) | 59% | 86% | 64% |
+| Empty: "nearly empty now" | 73% | 64% | 0% |
+| Full: forecast | 78% | 76% | 20% |
+| Full: forecast, cautious (P90) | 72% | 87% | 63% |
+| Full: "nearly full now" | 79% | 68% | 0% |
 
-The forecast trades about 1–3 points of precision for 9–11 points of recall, and it is the only one that warns
-about stations that are still healthy.
+The forecast trades 1–3 points of precision for 8–9 points of recall, and it is the only one that warns about
+stations that are still healthy. The cautious variant catches most stockouts at the cost of more false alarms.
 
 ## Limitations
 
-- **Serving weather comes from the forecast; training used observed weather.** Live error will be higher than
-  the offline numbers. October is the first month where this can be measured (below).
+- **Serving weather comes from the forecast; training used observed weather.** October, scored with forecast
+  weather, came in at 20.5% better than last week against 24.0% in September (below).
 - **Precision is a lower bound.** Citi Bike's own trucks and Bike Angels move bikes after an alert, so some
   "false alarms" were stockouts that someone prevented.
-- **Seasonal turns lag.** September ran ~9% above forecast as people returned to work; monthly retraining is
-  the fix.
+- **Seasonal turns lag.** September ran ~9% above forecast as people returned to work; by October the bias was
+  back to −2%. Monthly retraining is the fix.
 - **Not in the model:** planned events (Summer Streets caused the largest single errors, up to 4× normal
   demand), station closures, and new stations until the next retrain (they get zero flow; ~5% of stations).
 - **One weather point** (Midtown) for the whole city.
 - **Moves** are one per at-risk station, straight-line distance, no truck routing.
-- **The past week's forecasts in the track record are rebuilt** with archived weather forecasts rather than
-  stored when issued. The model is frozen, so the result is the same apart from small weather-forecast
-  revisions.
+- **The 7-day track record is rebuilt** with archived weather forecasts. Station capacity is frozen at the
+  values the model was trained with, so a data refresh can't change past forecasts; from November, forecasts
+  are also logged as issued.
+- **The 90th-percentile bound runs a little loose live:** 11.8–12.1% of October hours were above it (target 10%).
 
 ## October accuracy
 
-*Pending.* October's trip file is published in early November. Scoring it will give the first accuracy number
-for forecasts made with forecast weather, the way the live system runs.
+October 2026 is the first month the frozen model never saw. Forecasts for Oct 15–28 were made before its trips
+were published, with archived forecast weather, and scored against the real counts (789k station-hours):
+
+| October | MAE | vs "same hour last week" | vs published average | Above P90 |
+|---|---|---|---|---|
+| Pick-ups | 1.25 | **20.5% lower** | 5.3% lower | 11.8% |
+| Drop-offs | 1.25 | **20.3% lower** | 5.1% lower | 12.1% |
+
+- The 15% target holds out of sample. The edge over the published average shrank (13% in September) because the
+  October average already includes September's back-to-work level.
+- Residential, evening-heavy and balanced stations gain 21–22% over last week; business stations 15%.
+- Stations opened after the training months lose to both baselines until the next retrain.
+- Breakdowns by hour and station type are in the dashboard's **Forecast accuracy** tab
+  ([`reports/october_results.csv`](reports/october_results.csv)).
 
 ## Reproduce
 
@@ -136,12 +154,13 @@ Python 3.12 with [uv](https://docs.astral.sh/uv/). Data stays out of git; the co
 
 ```bash
 uv venv --python 3.12 && uv pip install -r requirements.txt
-python -m src.ingest.download_trips --months 12          # 8.3 GB of trip CSVs
-python -m src.ingest.weather --start 2025-10-01 --end 2026-10-01
+python -m src.ingest.download_trips --months 13          # 9.3 GB of trip CSVs
+python -m src.ingest.weather --start 2025-10-01 --end 2026-11-01
 python -m src.ingest.station_hour                        # cleaned trips + station_hour (~1.5 min)
 python -m src.features.build                             # feature table (~70 s, 4.8 GB peak)
 python -m src.models.final prepare                       # tree counts from the val months (frozen config)
 python -m src.models.final test                          # retrain Oct-Aug, the single test run (refuses a rerun)
+python -m src.models.evaluate --live <cached forecasts>  # score forecasts on months after the freeze
 python -m src.api.publish                                # forecasts + track record -> data/serving
 ARTIFACTS=local python -m uvicorn src.api.main:app       # API on :8000
 python -m streamlit run app/streamlit_app.py             # dashboard on :8501
@@ -160,7 +179,7 @@ src/decision/    stock projection, alerts, moves, alert backtest
 src/api/         FastAPI app and the publish job
 app/             Streamlit dashboard
 notebooks/       01_eda.ipynb
-reports/         figures, experiment log, test results, alert backtest
+reports/         figures, experiment log, test results, alert backtest, October accuracy
 .github/         collector (every 10 min), serve (every 3 h), CI
 ```
 
@@ -168,7 +187,7 @@ reports/         figures, experiment log, test results, alert backtest
 
 | Data | Source | Terms |
 |---|---|---|
-| Trips, Oct 2025 – Sep 2026 | [Citi Bike System Data](https://citibikenyc.com/system-data), monthly files from [s3.amazonaws.com/tripdata](https://s3.amazonaws.com/tripdata/index.html) | [Citi Bike Data License Agreement](https://citibikenyc.com/data-sharing-policy) |
+| Trips, Oct 2025 – Oct 2026 | [Citi Bike System Data](https://citibikenyc.com/system-data), monthly files from [s3.amazonaws.com/tripdata](https://s3.amazonaws.com/tripdata/index.html) | [Citi Bike Data License Agreement](https://citibikenyc.com/data-sharing-policy) |
 | Live station status and station info, every 10 min since Oct 15, 2026 | Citi Bike's public [GBFS feed](https://gbfs.lyft.com/gbfs/1.1/bkn/en/station_status.json) (format: [GBFS](https://github.com/MobilityData/gbfs)) | Citi Bike Data License Agreement |
 | Hourly weather: observed (training), archived forecasts (track record), live forecast (serving) | [Open-Meteo](https://open-meteo.com/) archive, historical-forecast and forecast APIs, one point in Midtown (40.7549, −73.9840) | [CC BY 4.0](https://open-meteo.com/en/license) |
 | US / New York public holidays | [`holidays`](https://github.com/vacanza/holidays) Python package | MIT |
