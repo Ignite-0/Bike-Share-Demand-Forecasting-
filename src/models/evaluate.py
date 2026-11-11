@@ -59,10 +59,10 @@ def _groups(df: pd.DataFrame) -> pd.DataFrame:
     }, index=df.index)
 
 
-def compare(df: pd.DataFrame, y: str, by: str) -> pd.DataFrame:
-    """Model vs both baselines for one dimension; gain_* = MAE reduction vs that baseline."""
+def compare(df: pd.DataFrame, y: str, by: str, baselines=("fresh", "published")) -> pd.DataFrame:
+    """Model vs each baseline column b_<name> for one dimension; gain_* = MAE reduction vs that baseline."""
     out = breakdown(df, y, "pred", by)
-    for b in ("fresh", "published"):
+    for b in baselines:
         out[f"mae_{b}"] = breakdown(df, y, f"b_{b}", by)["mae"]
         out[f"gain_{b}"] = 1 - out["mae"] / out[f"mae_{b}"]
     return out
@@ -208,10 +208,15 @@ def interval_report(target: str, out: str = "reports/errors") -> None:
 
 def live_report(forecasts: str, out: str = "reports/october_results.csv") -> None:
     """Score cached serving forecasts (blend mean + P90) on the 'live' split, i.e. months published after the
-    model was frozen, against both baselines. Overall, by cluster, volume tier, day type and hour."""
+    model was frozen, against both baselines. Overall, by cluster, volume tier, day type and hour.
+    Also *_4w (mean of the same hour over the last 4 weeks, needs fresh trips) and *_model (the LightGBM model
+    without the blend, backed out of the cached blend with the frozen weights)."""
     import duckdb
 
     from src.models.data import FEATURES
+
+    with open("models/final_config.json") as f:
+        weights = json.load(f)["blend_weights"]
 
     rep_cols = ["cluster", "volume_tier", "hour", "is_holiday", "is_weekend", "precip_mm"]
     base = [f"{t}_{c}" for t in PREFIX.values() for c in ("lag168", "same_hour_4w", "recent_profile", "profile")]
@@ -227,12 +232,17 @@ def live_report(forecasts: str, out: str = "reports/october_results.csv") -> Non
     for target, t in PREFIX.items():
         d = df.assign(pred=df[f"{t}_mean"], b_fresh=baseline(df, target, "fresh"),
                       b_published=baseline(df, target, "published"), above=df[target] > df[f"{t}_p90"])
+        w = d["hour"].map({int(h): v for h, v in weights[target].items()})
+        d["b_4w"] = d[f"{t}_same_hour_4w"].fillna(0)
+        d["b_model"] = ((d["pred"] - (1 - w) * d["b_published"]) / w).where(w > 0)  # blend = w*model + (1-w)*published
         for dim in ("all", "cluster", "volume_tier", "daytype", "hour"):
             by = dim if dim in ("all", "daytype") else f"{dim}_g"
-            tab = compare(d, target, by).join(d.groupby(by, observed=True)["above"].mean().rename("p90_above"))
+            tab = compare(d, target, by, ("fresh", "published", "4w", "model")).join(
+                d.groupby(by, observed=True)["above"].mean().rename("p90_above"))
             tables.append(tab.reset_index(names="group").assign(target=target, dim=dim))
     tab = pd.concat(tables)[["target", "dim", "group", "rows", "mae", "rmse", "wape", "bias", "mae_fresh",
-                             "mae_published", "gain_fresh", "gain_published", "p90_above"]]
+                             "mae_published", "gain_fresh", "gain_published", "p90_above",
+                             "mae_4w", "gain_4w", "mae_model", "gain_model"]]
     tab.to_csv(out, index=False, float_format="%.4f")
     with pd.option_context("display.width", 200, "display.max_rows", 200):
         print(tab.to_string(index=False, float_format="%.3f"))
