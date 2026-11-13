@@ -9,6 +9,7 @@ Usage: python -m src.ingest.weather --start 2025-10-01 --end 2026-11-01
 --api forecast: the live forecast (past 2 days + today + next 2), for serving. Both write weather_<api>.csv.
 """
 import argparse
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -29,7 +30,16 @@ def main(start: str, end: str, api: str = "archive", out: Path | None = None) ->
         "hourly": VARS, "timezone": "GMT", "format": "csv",
         "temperature_unit": "celsius", "wind_speed_unit": "kmh", "precipitation_unit": "mm",
     })
-    body = urllib.request.urlopen(f"{APIS[api]}?{q}", timeout=120).read()
+    # Open-Meteo has brief outages (TLS handshake timeouts); retry before failing the publish run.
+    for attempt in range(3):
+        try:
+            body = urllib.request.urlopen(f"{APIS[api]}?{q}", timeout=120).read()
+            break
+        except OSError as e:  # URLError and TimeoutError are both OSError
+            if attempt == 2:
+                raise
+            print(f"weather {api}: {e}; retrying in {60 * (attempt + 1)} s")
+            time.sleep(60 * (attempt + 1))
     # Open-Meteo's CSV starts with a location metadata block, then a blank line, then the hourly table.
     table = body.decode().split("\n\n", 1)[1]
     out = out or (OUT if api == "archive" else OUT.with_name(f"weather_{api.replace('-', '_')}.csv"))
