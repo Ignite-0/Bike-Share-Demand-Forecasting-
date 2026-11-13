@@ -10,6 +10,7 @@ Usage: python -m src.ingest.weather --start 2025-10-01 --end 2026-11-01
 """
 import argparse
 import time
+from datetime import datetime, timedelta, timezone
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -23,23 +24,34 @@ LAT, LON = 40.7549, -73.9840
 VARS = "temperature_2m,apparent_temperature,precipitation,rain,snowfall,wind_speed_10m,weather_code"
 
 
-def main(start: str, end: str, api: str = "archive", out: Path | None = None) -> Path:
-    span = {"past_days": 2, "forecast_days": 3} if api == "forecast" else {"start_date": start, "end_date": end}
-    q = urllib.parse.urlencode({
-        "latitude": LAT, "longitude": LON, **span,
-        "hourly": VARS, "timezone": "GMT", "format": "csv",
-        "temperature_unit": "celsius", "wind_speed_unit": "kmh", "precipitation_unit": "mm",
-    })
-    # Open-Meteo has brief outages (TLS handshake timeouts); retry before failing the publish run.
-    for attempt in range(3):
+def _get(url: str, tries: int = 3) -> bytes:
+    # Open-Meteo has outages (TLS handshake timeouts); retry before giving up.
+    for attempt in range(tries):
         try:
-            body = urllib.request.urlopen(f"{APIS[api]}?{q}", timeout=120).read()
-            break
+            return urllib.request.urlopen(url, timeout=60).read()
         except OSError as e:  # URLError and TimeoutError are both OSError
-            if attempt == 2:
+            if attempt == tries - 1:
                 raise
-            print(f"weather {api}: {e}; retrying in {60 * (attempt + 1)} s")
-            time.sleep(60 * (attempt + 1))
+            print(f"{url.split('?')[0]}: {e}; retrying in {30 * (attempt + 1)} s")
+            time.sleep(30 * (attempt + 1))
+
+
+def main(start: str, end: str, api: str = "archive", out: Path | None = None) -> Path:
+    units = {"hourly": VARS, "timezone": "GMT", "format": "csv",
+             "temperature_unit": "celsius", "wind_speed_unit": "kmh", "precipitation_unit": "mm"}
+    loc = {"latitude": LAT, "longitude": LON}
+    if api == "forecast":
+        try:
+            body = _get(f"{APIS[api]}?{urllib.parse.urlencode({**loc, 'past_days': 2, 'forecast_days': 3, **units})}")
+        except OSError:
+            # api.open-meteo.com was down for a day in Nov 2026. The historical-forecast endpoint also serves the
+            # upcoming days (same models), so ask it for the same 5-day window.
+            today = datetime.now(timezone.utc).date()
+            span = {"start_date": today - timedelta(days=2), "end_date": today + timedelta(days=2)}
+            print("forecast API down; using historical-forecast for the same window")
+            body = _get(f"{APIS['historical-forecast']}?{urllib.parse.urlencode({**loc, **span, **units})}")
+    else:
+        body = _get(f"{APIS[api]}?{urllib.parse.urlencode({**loc, 'start_date': start, 'end_date': end, **units})}")
     # Open-Meteo's CSV starts with a location metadata block, then a blank line, then the hourly table.
     table = body.decode().split("\n\n", 1)[1]
     out = out or (OUT if api == "archive" else OUT.with_name(f"weather_{api.replace('-', '_')}.csv"))
