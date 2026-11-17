@@ -59,10 +59,10 @@ def _groups(df: pd.DataFrame) -> pd.DataFrame:
     }, index=df.index)
 
 
-def compare(df: pd.DataFrame, y: str, by: str) -> pd.DataFrame:
-    """Model vs both baselines for one dimension; gain_* = MAE reduction vs that baseline."""
+def compare(df: pd.DataFrame, y: str, by: str, baselines=("fresh", "published")) -> pd.DataFrame:
+    """Model vs each baseline column b_<name> for one dimension; gain_* = MAE reduction vs that baseline."""
     out = breakdown(df, y, "pred", by)
-    for b in ("fresh", "published"):
+    for b in baselines:
         out[f"mae_{b}"] = breakdown(df, y, f"b_{b}", by)["mae"]
         out[f"gain_{b}"] = 1 - out["mae"] / out[f"mae_{b}"]
     return out
@@ -206,33 +206,82 @@ def interval_report(target: str, out: str = "reports/errors") -> None:
     print(tab.to_string(float_format="%.3f"))
 
 
+def dm_test(d, h: int = 1) -> tuple[float, float]:
+    """Diebold-Mariano test on a loss-differential series d, with the Harvey-Leybourne-Newbold small-sample
+    correction and a t(n-1) reference. h - 1 autocovariances enter the variance. Returns (stat, two-sided p)."""
+    from scipy.stats import t as t_dist
+
+    d = np.asarray(d, dtype="float64")
+    n, m = len(d), d.mean()
+    gam = [((d[k:] - m) * (d[:n - k] - m)).sum() / n for k in range(h)]
+    var = (gam[0] + 2 * sum(gam[1:])) / n
+    if var <= 0:
+        return np.nan, np.nan
+    stat = m / np.sqrt(var) * np.sqrt((n + 1 - 2 * h + h * (h - 1) / n) / n)
+    return float(stat), float(2 * t_dist.sf(abs(stat), n - 1))
+
+
+def day_bootstrap(ae_model, ae_base, n_boot: int = 4000, seed: int = 0) -> tuple[float, float]:
+    """95% interval of the MAE gain 1 - sum(ae_model) / sum(ae_base), resampling whole days.
+    Inputs: absolute error summed per day (one entry per day, same order)."""
+    a, b = np.asarray(ae_model, dtype="float64"), np.asarray(ae_base, dtype="float64")
+    idx = np.random.default_rng(seed).integers(0, len(a), (n_boot, len(a)))
+    lo, hi = np.quantile(1 - a[idx].sum(1) / b[idx].sum(1), [0.025, 0.975])
+    return float(lo), float(hi)
+
+
 def live_report(forecasts: str, out: str = "reports/october_results.csv") -> None:
     """Score cached serving forecasts (blend mean + P90) on the 'live' split, i.e. months published after the
-    model was frozen, against both baselines. Overall, by cluster, volume tier, day type and hour."""
+    model was frozen, against both baselines. Overall, by cluster, volume tier, day type and hour.
+    Also *_4w (mean of the same hour over the last 4 weeks, needs fresh trips) and *_model (the LightGBM model
+    without the blend, backed out of the cached blend with the frozen weights).
+    Significance of each overall gain -> <out>_significance.csv: Diebold-Mariano (HLN) on the daily mean loss
+    difference (h=1) and on the hourly one (h=24, for the daily cycle), plus a day-block bootstrap interval."""
     import duckdb
 
     from src.models.data import FEATURES
 
+    with open("models/final_config.json") as f:
+        weights = json.load(f)["blend_weights"]
+
     rep_cols = ["cluster", "volume_tier", "hour", "is_holiday", "is_weekend", "precip_mm"]
     base = [f"{t}_{c}" for t in PREFIX.values() for c in ("lag168", "same_hour_4w", "recent_profile", "profile")]
     df = duckdb.sql(f"""
-        SELECT f.station_id, f.ts_utc, f.pickups, f.dropoffs, {", ".join("f." + c for c in base + rep_cols)},
+        SELECT f.station_id, f.ts_utc, f.ts_local, f.pickups, f.dropoffs, {", ".join("f." + c for c in base + rep_cols)},
                fc.pu_mean, fc.pu_p90, fc.dr_mean, fc.dr_p90
         FROM '{forecasts}' fc JOIN {FEATURES} f USING (station_id, ts_utc)
         WHERE f.split = 'live'""").df()
     print(f"{len(df):,} rows, {df.station_id.nunique()} stations, {df.ts_utc.min()} to {df.ts_utc.max()} UTC")
     df = df.join(_groups(df), rsuffix="_g")
     df["all"] = "all"
-    tables = []
+    tables, sig = [], []
     for target, t in PREFIX.items():
         d = df.assign(pred=df[f"{t}_mean"], b_fresh=baseline(df, target, "fresh"),
                       b_published=baseline(df, target, "published"), above=df[target] > df[f"{t}_p90"])
+        w = d["hour"].map({int(h): v for h, v in weights[target].items()})
+        d["b_4w"] = d[f"{t}_same_hour_4w"].fillna(0)
+        d["b_model"] = ((d["pred"] - (1 - w) * d["b_published"]) / w).where(w > 0)  # blend = w*model + (1-w)*published
         for dim in ("all", "cluster", "volume_tier", "daytype", "hour"):
             by = dim if dim in ("all", "daytype") else f"{dim}_g"
-            tab = compare(d, target, by).join(d.groupby(by, observed=True)["above"].mean().rename("p90_above"))
+            tab = compare(d, target, by, ("fresh", "published", "4w", "model")).join(
+                d.groupby(by, observed=True)["above"].mean().rename("p90_above"))
             tables.append(tab.reset_index(names="group").assign(target=target, dim=dim))
+        day = d["ts_local"].dt.date
+        for b in ("fresh", "published", "4w", "model"):
+            e = pd.DataFrame({"m": (d["pred"] - d[target]).abs(), "b": (d[f"b_{b}"] - d[target]).abs()})
+            daily, hourly = e.groupby(day).sum(), e.groupby(d["ts_utc"]).mean()
+            dm_d, p_d = dm_test((daily.m - daily.b) / e.groupby(day).size())
+            dm_h, p_h = dm_test(hourly.m - hourly.b, h=24)
+            lo, hi = day_bootstrap(daily.m, daily.b)
+            sig.append({"target": target, "baseline": b, "days": len(daily), "gain": 1 - e.m.sum() / e.b.sum(),
+                        "gain_lo95": lo, "gain_hi95": hi, "dm_daily": dm_d, "p_daily": p_d,
+                        "dm_hourly": dm_h, "p_hourly": p_h})
+    sig = pd.DataFrame(sig)
+    sig.to_csv(out.replace(".csv", "_significance.csv"), index=False, float_format="%.4f")
+    print(sig.to_string(index=False, float_format="%.4f"))
     tab = pd.concat(tables)[["target", "dim", "group", "rows", "mae", "rmse", "wape", "bias", "mae_fresh",
-                             "mae_published", "gain_fresh", "gain_published", "p90_above"]]
+                             "mae_published", "gain_fresh", "gain_published", "p90_above",
+                             "mae_4w", "gain_4w", "mae_model", "gain_model"]]
     tab.to_csv(out, index=False, float_format="%.4f")
     with pd.option_context("display.width", 200, "display.max_rows", 200):
         print(tab.to_string(index=False, float_format="%.3f"))

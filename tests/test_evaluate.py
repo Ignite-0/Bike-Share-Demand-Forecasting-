@@ -34,6 +34,19 @@ def test_feature_sets_from_tiers():
     assert set(cols) - set(feature_cols("A+C+sid-season")) == {"doy_sin", "doy_cos", "daylight_h"}
 
 
+def test_dm_test_and_day_bootstrap():
+    from scipy.stats import ttest_1samp
+
+    from src.models.evaluate import day_bootstrap, dm_test
+
+    d = np.random.default_rng(1).normal(0.2, 1, 40)
+    stat, p = dm_test(d)  # with h = 1 the HLN-corrected DM statistic is exactly the one-sample t-test
+    ref = ttest_1samp(d, 0)
+    assert stat == pytest.approx(ref.statistic) and p == pytest.approx(ref.pvalue)
+    lo, hi = day_bootstrap([9, 8, 10, 9], [10, 10, 10, 10])
+    assert 0 < lo <= 0.1 <= hi < 0.2  # point gain is 1 - 36/40 = 0.1
+
+
 def test_blend_weights_pick_the_better_forecast_per_hour():
     from src.models.evaluate import fit_blend
 
